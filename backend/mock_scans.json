@@ -1,0 +1,8 @@
+[
+  {"id":"VIEU-001284","captured_at":"2026-09-17T09:42:18","stage1":"Healthy","stage2":"Large hand","confidence":97,"grade":"Class A","quality_index":91,"line":"Line 2"},
+  {"id":"VIEU-001283","captured_at":"2026-09-17T09:41:56","stage1":"Healthy","stage2":"Small hand","confidence":94,"grade":"Class B","quality_index":83,"line":"Line 1"},
+  {"id":"VIEU-001282","captured_at":"2026-09-17T09:41:20","stage1":"Unhealthy","stage2":"Rejected","confidence":98,"grade":"Rejected","quality_index":42,"line":"Line 3"},
+  {"id":"VIEU-001281","captured_at":"2026-09-16T09:40:51","stage1":"Healthy","stage2":"Large hand","confidence":91,"grade":"Class A","quality_index":89,"line":"Line 2"},
+  {"id":"VIEU-001280","captured_at":"2026-09-16T09:40:22","stage1":"Healthy","stage2":"Small hand","confidence":96,"grade":"Class B","quality_index":81,"line":"Line 1"},
+  {"id":"VIEU-001279","captured_at":"2026-09-15T09:39:43","stage1":"Unhealthy","stage2":"Rejected","confidence":93,"grade":"Rejected","quality_index":38,"line":"Line 3"}
+]

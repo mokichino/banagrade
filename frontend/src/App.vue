@@ -376,11 +376,6 @@ function setPage(page) {
         </button>
       </div>
 
-      <div class="sidebar-summary">
-        <span class="summary-badge">Thesis focus</span>
-        <p>{{ thesisSummary }}</p>
-      </div>
-
       <nav id="primary-navigation" class="sidebar-nav" :class="{ open: menuOpen }" aria-label="Primary navigation">
         <button
           v-for="item in navItems"

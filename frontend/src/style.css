@@ -102,33 +102,6 @@ button {
   margin-top: 2px;
 }
 
-.sidebar-summary {
-  margin: 8px 8px 18px;
-  padding: 14px 14px 12px;
-  border-radius: var(--radius-md);
-  background: linear-gradient(180deg, #fffaf0, #fff);
-  border: 1px solid rgba(244, 197, 66, 0.22);
-}
-
-.summary-badge {
-  display: inline-block;
-  padding: 5px 8px;
-  background: rgba(244, 197, 66, 0.12);
-  border-radius: 999px;
-  color: #a16207;
-  font-size: 0.64rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  font-weight: 700;
-}
-
-.sidebar-summary p {
-  margin: 10px 0 0;
-  font-size: 0.78rem;
-  line-height: 1.55;
-  color: var(--muted-strong);
-}
-
 .sidebar-nav {
   display: flex;
   flex-direction: column;

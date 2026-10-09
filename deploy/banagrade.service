@@ -1,0 +1,19 @@
+[Unit]
+Description=Banagrade local grading service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=banagrade
+Group=banagrade
+WorkingDirectory=/opt/banagrade/backend
+EnvironmentFile=-/etc/banagrade/banagrade.env
+ExecStart=/opt/banagrade/.venv/bin/uvicorn production:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

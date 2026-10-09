@@ -7,3 +7,9 @@ venv/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+/Lib/
+/Scripts/
+/share/
+/package-lock.json
+backend/*.db-shm
+backend/*.db-wal

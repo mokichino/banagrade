@@ -4,7 +4,7 @@ import ScanTable from './components/ScanTable.vue'
 import AnalyticsView from './components/AnalyticsView.vue'
 import SusEvaluation from './components/SusEvaluation.vue'
 
-const apiBase = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000'
+const apiBase = import.meta.env.VITE_API_BASE || ''
 const activeView = ref('Overview')
 const loading = ref(true)
 const error = ref('')
@@ -58,7 +58,9 @@ async function refresh() {
 }
 
 function connectLive() {
-  const wsUrl = apiBase.replace(/^http/, 'ws') + '/ws/live'
+  const wsUrl = apiBase
+    ? apiBase.replace(/^http/, 'ws') + '/ws/live'
+    : `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws/live`
   socket = new WebSocket(wsUrl)
   socket.onopen = () => { socketState.value = 'Connected' }
   socket.onmessage = event => { liveEvent.value = JSON.parse(event.data); refresh() }

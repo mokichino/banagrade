@@ -13,3 +13,6 @@ frontend/.vite/
 /package-lock.json
 backend/*.db-shm
 backend/*.db-wal
+*.log
+backend/demo.db*
+backend/demo_retrain/

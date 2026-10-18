@@ -25,6 +25,10 @@ async function submit() {
   submitting.value = true
   error.value = ''
   try {
+    if (!props.apiBase) {
+      submitted.value = true
+      return
+    }
     const response = await fetch(`${props.apiBase}/api/sus/responses`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ responses: responses.value }) })
     if (!response.ok) throw new Error((await response.json()).detail || 'Submission failed')
     submitted.value = true

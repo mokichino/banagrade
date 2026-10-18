@@ -3,13 +3,13 @@ from __future__ import annotations
 import csv
 import io
 import json
+import shutil
 import sqlite3
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .grading import GradeThresholds
 
 
 SCHEMA = """
@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS scans (
     stage1_status TEXT,
     stage1_confidence REAL,
     stage2_detected INTEGER,
+    stage2_confidence REAL,
     bbox_coords TEXT,
     pixel_length REAL,
     calculated_length_cm REAL,
@@ -78,6 +79,16 @@ CREATE TABLE IF NOT EXISTS system_events (
     scan_id TEXT REFERENCES scans(scan_id),
     session_id TEXT REFERENCES sessions(id)
 );
+CREATE TABLE IF NOT EXISTS scan_disputes (
+    id TEXT PRIMARY KEY,
+    scan_id TEXT NOT NULL REFERENCES scans(scan_id),
+    reason TEXT,
+    corrected_grade TEXT,
+    archived_frames TEXT,
+    created_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'resolved'))
+);
+CREATE INDEX IF NOT EXISTS idx_scan_disputes_scan_id ON scan_disputes(scan_id);
 """
 
 
@@ -101,17 +112,51 @@ class Storage:
     def initialize(self) -> None:
         with self.connect() as connection:
             connection.executescript(SCHEMA)
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(scan_disputes)")}
+            if "corrected_grade" not in columns:
+                connection.execute("ALTER TABLE scan_disputes ADD COLUMN corrected_grade TEXT")
+            if "archived_frames" not in columns:
+                connection.execute("ALTER TABLE scan_disputes ADD COLUMN archived_frames TEXT")
+            scan_columns = {row["name"] for row in connection.execute("PRAGMA table_info(scans)")}
+            if "stage2_confidence" not in scan_columns:
+                connection.execute("ALTER TABLE scans ADD COLUMN stage2_confidence REAL")
             connection.execute(
                 "INSERT OR IGNORE INTO system_config (id, updated_at) VALUES (1, ?)",
                 (now_iso(),),
             )
 
-    def thresholds(self) -> GradeThresholds:
+    def dispute_scan(
+        self,
+        scan_id: str,
+        reason: str | None,
+        corrected_grade: str | None,
+        retrain_dir: str | Path = "/dataset/retrain",
+    ) -> dict[str, Any]:
+        dispute_id = str(uuid.uuid4())
         with self.connect() as connection:
-            row = connection.execute(
-                "SELECT class_a_min_cm, class_b_min_cm FROM system_config WHERE id = 1"
-            ).fetchone()
-        return GradeThresholds(row["class_a_min_cm"], row["class_b_min_cm"])
+            scan = connection.execute("SELECT * FROM scans WHERE scan_id = ?", (scan_id,)).fetchone()
+            if scan is None:
+                raise KeyError(scan_id)
+            archived: list[str] = []
+            image_refs = json.loads(scan["image_refs"]) if scan["image_refs"] else []
+            if isinstance(image_refs, str):
+                image_refs = [image_refs]
+            destination = Path(retrain_dir)
+            destination.mkdir(parents=True, exist_ok=True)
+            for image_ref in image_refs:
+                source = Path(image_ref)
+                if source.is_file():
+                    target = destination / f"{scan_id}_{source.name}"
+                    shutil.copy2(source, target)
+                    archived.append(str(target))
+            connection.execute(
+                "INSERT INTO scan_disputes (id, scan_id, reason, corrected_grade, archived_frames, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (dispute_id, scan_id, reason, corrected_grade, json.dumps(archived), now_iso()),
+            )
+            if corrected_grade:
+                stored_grade = None if corrected_grade == "Technical Failure" else corrected_grade
+                connection.execute("UPDATE scans SET final_grade = ? WHERE scan_id = ?", (stored_grade, scan_id))
+        return {"id": dispute_id, "scan_id": scan_id, "reason": reason, "corrected_grade": corrected_grade, "archived_frames": archived}
 
     def create_session(self, notes: str | None = None) -> dict[str, Any]:
         session = {"id": str(uuid.uuid4()), "started_at": now_iso(), "status": "open", "notes": notes}
@@ -132,13 +177,13 @@ class Storage:
     def save_scan(self, record: dict[str, Any]) -> dict[str, Any]:
         fields = (
             "scan_id", "session_id", "captured_at", "completed_at", "stage1_status",
-            "stage1_confidence", "stage2_detected", "bbox_coords", "pixel_length",
+            "stage1_confidence", "stage2_detected", "stage2_confidence", "bbox_coords", "pixel_length",
             "calculated_length_cm", "calibration_factor_used", "final_grade",
             "rejection_reason", "processing_status", "inference_time_ms", "stage_timings",
             "image_refs", "model_metadata", "threshold_values", "error_details",
         )
         values = [record.get(field) for field in fields]
-        for index in (7, 15, 16, 17, 18):
+        for index in (8, 16, 17, 18, 19):
             if values[index] is not None and not isinstance(values[index], str):
                 values[index] = json.dumps(values[index], separators=(",", ":"))
         with self.connect() as connection:
@@ -155,30 +200,99 @@ class Storage:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def analytics_summary(self) -> dict[str, Any]:
+    def get_scan(self, scan_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
-            rows = connection.execute(
-                "SELECT final_grade, rejection_reason, calculated_length_cm, inference_time_ms "
-                "FROM scans WHERE processing_status = 'completed'"
-            ).fetchall()
-        total = len(rows)
+            row = connection.execute("SELECT * FROM scans WHERE scan_id = ?", (scan_id,)).fetchone()
+        return dict(row) if row else None
+
+    def active_session(self) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM sessions WHERE status = 'open' ORDER BY started_at DESC LIMIT 1"
+            ).fetchone()
+        return dict(row) if row else None
+
+    def active_session_id(self) -> str | None:
+        session = self.active_session()
+        return session["id"] if session else None
+
+    def ensure_active_session(self) -> dict[str, Any]:
+        return self.active_session() or self.create_session("Shift opened automatically at startup")
+
+    def _graded_rows(self, session_id: str | None) -> list[sqlite3.Row]:
+        query = "SELECT captured_at, final_grade, processing_status, inference_time_ms FROM scans"
+        params: tuple[Any, ...] = ()
+        if session_id:
+            query += " WHERE session_id = ?"
+            params = (session_id,)
+        with self.connect() as connection:
+            return connection.execute(query, params).fetchall()
+
+    def analytics_summary(self, session_id: str | None = None) -> dict[str, Any]:
+        """Grade counts. Technical failures are excluded from commercial rates (Section 4.4.3)."""
+        rows = self._graded_rows(session_id)
         class_a = sum(row["final_grade"] == "Class A" for row in rows)
         class_b = sum(row["final_grade"] == "Class B" for row in rows)
         rejected = sum(row["final_grade"] == "Rejected" for row in rows)
-        accepted_lengths = [row["calculated_length_cm"] for row in rows if row["final_grade"] in ("Class A", "Class B") and row["calculated_length_cm"] is not None]
-        latencies = [row["inference_time_ms"] for row in rows if row["inference_time_ms"] is not None]
-        commercial_rejections = sum(row["final_grade"] == "Rejected" for row in rows)
+        graded = class_a + class_b + rejected
+        accepted = class_a + class_b
+        latencies = [row["inference_time_ms"] for row in rows if row["inference_time_ms"] is not None and row["processing_status"] == "completed"]
         return {
-            "total_completed_scans": total,
+            "session_id": session_id,
+            "total_scans": len(rows),
+            "total_completed_scans": graded,
             "class_a_count": class_a,
             "class_b_count": class_b,
             "rejected_count": rejected,
-            "technical_failure_count": sum(row["final_grade"] is None for row in rows),
-            "export_acceptance_rate": round((class_a + class_b) / total * 100, 2) if total else 0,
-            "rejection_rate": round(commercial_rejections / total * 100, 2) if total else 0,
-            "mean_accepted_length_cm": round(sum(accepted_lengths) / len(accepted_lengths), 2) if accepted_lengths else None,
+            "technical_failure_count": len(rows) - graded,
+            "export_acceptance_rate": round(accepted / graded * 100, 2) if graded else 0,
+            "class_a_share_of_accepted": round(class_a / accepted * 100, 2) if accepted else 0,
+            "rejection_rate": round(rejected / graded * 100, 2) if graded else 0,
             "average_inference_latency_ms": round(sum(latencies) / len(latencies), 2) if latencies else None,
         }
+
+    def rejection_trend(self, session_id: str | None = None, bucket_minutes: int = 15) -> list[dict[str, Any]]:
+        """Rejection rate per time bucket over graded scans, oldest first."""
+        if bucket_minutes <= 0:
+            raise ValueError("bucket_minutes must be positive")
+        buckets: dict[datetime, dict[str, int]] = {}
+        for row in self._graded_rows(session_id):
+            if row["final_grade"] not in ("Class A", "Class B", "Rejected") or not row["captured_at"]:
+                continue
+            try:
+                captured = datetime.fromisoformat(row["captured_at"])
+            except ValueError:
+                continue
+            if captured.tzinfo is None:
+                captured = captured.replace(tzinfo=UTC)
+            minute = (captured.minute // bucket_minutes) * bucket_minutes if bucket_minutes < 60 else 0
+            start = captured.replace(minute=minute, second=0, microsecond=0)
+            if bucket_minutes >= 60:
+                hours = bucket_minutes // 60
+                start = start.replace(hour=(start.hour // hours) * hours)
+            bucket = buckets.setdefault(start, {"total": 0, "rejected": 0})
+            bucket["total"] += 1
+            bucket["rejected"] += row["final_grade"] == "Rejected"
+        return [
+            {"bucket_start": start.isoformat(timespec="seconds"), "total": value["total"], "rejected": value["rejected"], "rejection_rate": round(value["rejected"] / value["total"] * 100, 2)}
+            for start, value in sorted(buckets.items())
+        ]
+
+    def latency_stats(self, limit: int = 50) -> float | None:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT inference_time_ms FROM scans WHERE processing_status = 'completed' AND inference_time_ms IS NOT NULL ORDER BY captured_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return round(sum(row[0] for row in rows) / len(rows), 1) if rows else None
+
+    def ping(self) -> bool:
+        try:
+            with self.connect() as connection:
+                connection.execute("SELECT 1").fetchone()
+            return True
+        except sqlite3.Error:
+            return False
 
 
 def calculate_sus(responses: list[int]) -> tuple[list[int], float]:

@@ -1,7 +1,24 @@
+"""Deterministic grading contract.
+
+Thesis traceability:
+- Section 3.5.4 Rule 1: an Unhealthy Stage 1 result terminates the pipeline as Rejected.
+- Sections 3.5.3 / 3.7.6 / 4.4.3: healthy bunches are graded by the horizontal
+  whole-bunch bounding-box width measured in the original 4608 x 2592 image
+  coordinate system. The frozen, validation-selected threshold is 2730.07 px:
+  width >= threshold -> Class A, otherwise Class B.
+- The threshold is an image-space decision boundary, not a centimetre measurement
+  (Sections 1.6, 2.4, 3.4.2). The "Large hand >= 12 cm" / "Small hand 8-12 cm"
+  wording is the commercial class description from Table 1 / Table 5 only.
+"""
+
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from enum import StrEnum
+
+REFERENCE_RESOLUTION: tuple[int, int] = (4608, 2592)
+DEFAULT_WIDTH_THRESHOLD_PX = 2730.07
 
 
 class FinalGrade(StrEnum):
@@ -12,29 +29,19 @@ class FinalGrade(StrEnum):
 
 class RejectionReason(StrEnum):
     SURFACE_UNHEALTHY = "SURFACE_UNHEALTHY"
-    UNDERSIZED = "UNDERSIZED"
     DETECTION_FAILED = "DETECTION_FAILED"
-    CALIBRATION_INVALID = "CALIBRATION_INVALID"
+    LOW_CONFIDENCE = "LOW_CONFIDENCE"
     CAMERA_ERROR = "CAMERA_ERROR"
     ILLUMINATION_ERROR = "ILLUMINATION_ERROR"
     PIPELINE_ERROR = "PIPELINE_ERROR"
+    # Retained so rows written by earlier cm-based builds still render.
+    UNDERSIZED = "UNDERSIZED"
+    CALIBRATION_INVALID = "CALIBRATION_INVALID"
 
 
 class Stage1Result(StrEnum):
     HEALTHY = "Healthy"
     UNHEALTHY = "Unhealthy"
-
-
-@dataclass(frozen=True, slots=True)
-class GradeThresholds:
-    class_a_min_cm: float = 12.0
-    class_b_min_cm: float = 8.0
-
-    def validate(self) -> None:
-        if self.class_b_min_cm <= 0:
-            raise ValueError("Class B minimum must be positive")
-        if self.class_a_min_cm <= self.class_b_min_cm:
-            raise ValueError("Class A minimum must be greater than Class B minimum")
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,26 +51,35 @@ class GradeDecision:
     is_technical_failure: bool = False
 
 
+def width_threshold_px() -> float:
+    value = float(os.getenv("BANAGRADE_WIDTH_THRESHOLD_PX", DEFAULT_WIDTH_THRESHOLD_PX))
+    if value <= 0:
+        raise ValueError("BANAGRADE_WIDTH_THRESHOLD_PX must be positive")
+    return value
+
+
+def scale_width_to_reference(width_px: float, image_width: int) -> float:
+    """Project a width measured on a frame of any size onto the 4608 px reference frame."""
+    if image_width <= 0:
+        raise ValueError("image_width must be positive")
+    return width_px * (REFERENCE_RESOLUTION[0] / image_width)
+
+
 def decide_grade(
     stage1: Stage1Result,
-    length_cm: float | None,
-    thresholds: GradeThresholds,
+    width_px: float | None,
+    threshold_px: float = DEFAULT_WIDTH_THRESHOLD_PX,
     *,
     stage2_detected: bool = True,
-    calibration_valid: bool = True,
 ) -> GradeDecision:
-    thresholds.validate()
-
+    if threshold_px <= 0:
+        raise ValueError("threshold_px must be positive")
     if stage1 is Stage1Result.UNHEALTHY:
         return GradeDecision(FinalGrade.REJECTED, RejectionReason.SURFACE_UNHEALTHY)
-    if not calibration_valid:
-        return GradeDecision(None, RejectionReason.CALIBRATION_INVALID, True)
     if not stage2_detected:
         return GradeDecision(None, RejectionReason.DETECTION_FAILED, True)
-    if length_cm is None or length_cm < 0:
+    if width_px is None or width_px < 0:
         return GradeDecision(None, RejectionReason.PIPELINE_ERROR, True)
-    if length_cm >= thresholds.class_a_min_cm:
+    if width_px >= threshold_px:
         return GradeDecision(FinalGrade.CLASS_A)
-    if length_cm >= thresholds.class_b_min_cm:
-        return GradeDecision(FinalGrade.CLASS_B)
-    return GradeDecision(FinalGrade.REJECTED, RejectionReason.UNDERSIZED)
+    return GradeDecision(FinalGrade.CLASS_B)

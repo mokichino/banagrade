@@ -4,13 +4,17 @@ Banagrade is a local-first Cardava banana screening and size grading application
 
 ## Current architecture
 
-- `backend/app/grading.py` is the authoritative deterministic grading contract.
-- `backend/app/storage.py` owns SQLite initialization, WAL mode, append-only scan records, sessions, configuration audit, analytics, and SUS scoring.
-- `backend/app/api.py` exposes REST endpoints and `/ws/live`.
-- `backend/app/pipeline.py` defines the integration boundary for the existing camera/inference/GPIO pipeline. The default adapter reports unavailable and does not open hardware.
-- `deploy/banagrade.service` describes production startup through systemd.
+The system implements the thesis *A Two-Stage Deep Learning System for Cardava Banana Disease Detection and Quality Classification with Operational Analytics Dashboard*. `docs/QUALITY_CHECKLIST.md` maps every feature to its thesis section.
 
-No camera, model, GPIO, telemetry, or scan data is fabricated. The real pipeline must implement the `Pipeline` protocol and publish persisted scan outcomes before `scan_completed` events are emitted.
+- `backend/app/grading.py` is the authoritative grading contract. Stage 1 Unhealthy means Rejected. Healthy bunches are graded by horizontal bounding-box width in the 4608×2592 frame: **≥ 2730.07 px is Class A, otherwise Class B** (thesis §4.4.3). The threshold is an image-space boundary, not a centimetre measurement.
+- `backend/app/preprocessing.py` builds the RGB-to-HSV mask that Stage 1 receives (§3.3.7). Stage 2 receives the raw frame.
+- `backend/app/pipeline.py` is the presence-triggered FSM. It captures at 4608×2592 on Camera Module 3, locks autofocus after one cycle at boot, and triggers on a stable in-frame detection held for 400 ms. Each result is persisted to SQLite and pushed over `/ws/live`.
+- `backend/app/leds.py` drives the floor LEDs: green ready, yellow Class A, blue Class B, red Rejected, slow red blink while booting, fast red blink on error. The dashboard mirrors the same state.
+- `backend/app/telemetry.py` reads uptime, CPU temperature, fan state, latency and database health from the device. Unavailable readings are `null`, never estimated.
+- `backend/app/storage.py` owns SQLite, shift sessions, analytics, the rejection trend, disputes and SUS scoring.
+- `frontend/` is a Vue 3 + Chart.js app with three pages: Live Dashboard, Recent Scans and System Status.
+
+On Raspberry Pi OS, `picamera2`, `libcamera` and `gpiozero` are apt packages. The backend appends `/usr/lib/python3/dist-packages` to `sys.path` when they are missing from the virtualenv, so the venv does not need `--system-site-packages`.
 
 ## Development on a remote SSH machine
 
@@ -48,11 +52,11 @@ python -m pip install -r backend/requirements-runtime.txt
 Start the backend in the first terminal:
 
 ```bash
-export PYTHONPATH="$PWD/backend"
-python -m uvicorn app.api:app --host 0.0.0.0 --port 8000
+cd backend
+python -m uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-Leave this terminal running. Verify the backend from a second remote terminal:
+This is the launch command from the thesis (`uvicorn main:app --host 0.0.0.0 --port 8000`). Leave this terminal running. Verify the backend from a second remote terminal:
 
 ```bash
 cd /home/admin/Documents/banagrade
@@ -60,6 +64,16 @@ curl http://127.0.0.1:8000/api/health
 ```
 
 The response should contain `"status":"ok"`.
+
+
+When all dependencies are already installed, the quick start is:
+
+```bash
+cd /home/admin/Documents/banagrade/backend
+source ../.venv/bin/activate
+python -m uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
 
 ### 2. Set up and start the frontend
 
@@ -99,8 +113,31 @@ curl http://127.0.0.1:5173/api/health
 
 In each server terminal, press `Ctrl+C`.
 
-The production entry point is `backend.production:app`. Production deployment
-is described in `deploy/banagrade.service`.
+The production entry point is `backend/main.py` (`uvicorn main:app`). Production deployment
+is described in `deploy/banagrade.service`. Configuration variables are documented in
+`backend/.env.example`.
+
+## Presentation mode (mock data)
+
+Mock data lives in its own database, `backend/demo.db` (git-ignored), so real scans in `banagrade.db` are never mixed with it. The seeding script refuses to write into `banagrade.db` unless you pass `--force`.
+
+```bash
+cd /home/admin/Documents/banagrade/backend
+source ../.venv/bin/activate
+python scripts/seed_demo.py --reset          # 6 past shifts + a 3-hour current shift (~1,700 scans)
+BANAGRADE_DB=demo.db BANAGRADE_DEMO_MODE=true python -m uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+To make the dashboard and LED board update live during the talk, run this in a second terminal:
+
+```bash
+cd /home/admin/Documents/banagrade/backend
+../.venv/bin/python scripts/seed_demo.py --live --interval 6
+```
+
+Each streamed scan flashes the LED mirror (capture, then yellow, blue or red) and appears on the dashboard. Mock scans follow the real grading rule. Widths of 2730.07 px or more are Class A and narrower widths are Class B. Rejected comes only from Stage 1 Unhealthy, and latency is about 1 s.
+
+Every mock record is tagged `"demo": true`, and the header shows a **Demo data** label while mock scans exist. Do not present mock numbers as thesis results. To return to real data, restart the API without `BANAGRADE_DB=demo.db` and `BANAGRADE_DEMO_MODE`.
 
 ## Verification
 
@@ -111,6 +148,12 @@ cd /home/admin/Documents/banagrade
 source .venv/bin/activate
 export PYTHONPATH="$PWD/backend"
 python -m pytest backend/tests -q
+
+cd frontend
+npm test          # Vitest: grade labels, LED mapping, PDF export
+npm run build
 ```
+
+The frontend `.npmrc` sets `legacy-peer-deps=true`. The Debian npm 9 package crashes while resolving Vitest 4's optional peers without it.
 
 Hardware tests must use mocks by default. Physical camera and GPIO verification is a separate, explicitly enabled deployment check.

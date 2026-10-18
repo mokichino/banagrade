@@ -1,46 +1,54 @@
 import pytest
 
 from app.grading import (
+    DEFAULT_WIDTH_THRESHOLD_PX,
     FinalGrade,
-    GradeThresholds,
     RejectionReason,
     Stage1Result,
     decide_grade,
+    scale_width_to_reference,
 )
 
 
-def test_grade_boundaries() -> None:
-    thresholds = GradeThresholds()
-    assert decide_grade(Stage1Result.HEALTHY, 12, thresholds).grade is FinalGrade.CLASS_A
-    assert decide_grade(Stage1Result.HEALTHY, 8, thresholds).grade is FinalGrade.CLASS_B
-    assert decide_grade(Stage1Result.HEALTHY, 7.99, thresholds).rejection_reason is RejectionReason.UNDERSIZED
+def test_width_threshold_boundary_matches_thesis_rule() -> None:
+    # Thesis 4.4.3 / models/grading_config.txt: width >= 2730.07 px -> Class A, else Class B.
+    assert decide_grade(Stage1Result.HEALTHY, 2730.07).grade is FinalGrade.CLASS_A
+    assert decide_grade(Stage1Result.HEALTHY, 3100.0).grade is FinalGrade.CLASS_A
+    assert decide_grade(Stage1Result.HEALTHY, 2730.06).grade is FinalGrade.CLASS_B
+    assert decide_grade(Stage1Result.HEALTHY, 900.0).grade is FinalGrade.CLASS_B
+    assert DEFAULT_WIDTH_THRESHOLD_PX == 2730.07
 
 
-def test_unhealthy_is_commercial_rejection() -> None:
-    decision = decide_grade(Stage1Result.UNHEALTHY, None, GradeThresholds())
+def test_unhealthy_is_rejected_regardless_of_width() -> None:
+    decision = decide_grade(Stage1Result.UNHEALTHY, 4000.0)
     assert decision.grade is FinalGrade.REJECTED
     assert decision.rejection_reason is RejectionReason.SURFACE_UNHEALTHY
     assert decision.is_technical_failure is False
 
 
+def test_healthy_bunch_is_never_size_rejected() -> None:
+    # Pixel-only rule: no centimetre-based undersize rejection.
+    assert decide_grade(Stage1Result.HEALTHY, 1.0).grade is FinalGrade.CLASS_B
+
+
 @pytest.mark.parametrize(
-    ("kwargs", "reason"),
-    [
-        ({"stage2_detected": False}, RejectionReason.DETECTION_FAILED),
-        ({"calibration_valid": False}, RejectionReason.CALIBRATION_INVALID),
-        ({"length_cm": None}, RejectionReason.PIPELINE_ERROR),
-    ],
+    ("width", "detected", "reason"),
+    [(None, False, RejectionReason.DETECTION_FAILED), (None, True, RejectionReason.PIPELINE_ERROR), (-1.0, True, RejectionReason.PIPELINE_ERROR)],
 )
-def test_technical_failures_do_not_receive_a_commercial_grade(kwargs, reason) -> None:
-    length_cm = kwargs.pop("length_cm", 10)
-    decision = decide_grade(Stage1Result.HEALTHY, length_cm, GradeThresholds(), **kwargs)
+def test_technical_failures_receive_no_commercial_grade(width, detected, reason) -> None:
+    decision = decide_grade(Stage1Result.HEALTHY, width, stage2_detected=detected)
     assert decision.grade is None
     assert decision.rejection_reason is reason
     assert decision.is_technical_failure is True
 
 
-def test_thresholds_must_be_ordered_and_positive() -> None:
+def test_width_is_projected_onto_reference_frame() -> None:
+    assert scale_width_to_reference(1137.53, 1920) == pytest.approx(2730.07, abs=0.01)
+    assert scale_width_to_reference(2730.07, 4608) == pytest.approx(2730.07)
     with pytest.raises(ValueError):
-        GradeThresholds(class_a_min_cm=8, class_b_min_cm=8).validate()
+        scale_width_to_reference(10, 0)
+
+
+def test_threshold_must_be_positive() -> None:
     with pytest.raises(ValueError):
-        GradeThresholds(class_a_min_cm=12, class_b_min_cm=0).validate()
+        decide_grade(Stage1Result.HEALTHY, 10, 0)

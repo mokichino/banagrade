@@ -1,0 +1,6 @@
+Stage 2 A/B Grading Configuration
+
+Frozen width threshold: 2730.07 pixels
+
+Width >= 2730.07 px = Class A
+Width < 2730.07 px = Class B

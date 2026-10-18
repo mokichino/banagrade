@@ -50,6 +50,13 @@ def client(tmp_path, monkeypatch):
         yield test_client
 
 
+def test_led_test_steps_through_every_state(client, monkeypatch) -> None:
+    monkeypatch.delenv("BANAGRADE_DEMO_MODE", raising=False)  # LED test works without demo mode
+    body = client.post("/api/demo/led-test?step_scale=0").json()
+    assert body["states"] == ["ready", "capture", "class_a", "class_b", "rejected", "booting", "error"]
+    assert client.get("/api/system/status").json()["pipeline"]["led"]["state"] == "ready"
+
+
 def test_simulate_endpoint_requires_demo_mode(client, monkeypatch) -> None:
     monkeypatch.delenv("BANAGRADE_DEMO_MODE", raising=False)
     assert client.post("/api/demo/simulate-scan").status_code == 404

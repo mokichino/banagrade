@@ -29,9 +29,9 @@ const ALL_OFF = { green: 'off', yellow: 'off', blue: 'off', red: 'off' }
 
 export function lampPattern(state) {
   switch (state) {
-    case 'ready': return { ...ALL_OFF, green: 'pulse' }
-    case 'class_a': return { ...ALL_OFF, yellow: 'flash' }
-    case 'class_b': return { ...ALL_OFF, blue: 'flash' }
+    case 'ready': return { ...ALL_OFF, green: 'on' }
+    case 'class_a': return { ...ALL_OFF, yellow: 'on' }
+    case 'class_b': return { ...ALL_OFF, blue: 'on' }
     case 'rejected': return { ...ALL_OFF, red: 'on' }
     case 'booting': return { ...ALL_OFF, red: 'slow' }
     case 'error': return { ...ALL_OFF, red: 'fast' }

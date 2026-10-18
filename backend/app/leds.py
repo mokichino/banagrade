@@ -28,7 +28,7 @@ class LedState(StrEnum):
 
 GRADE_TO_LED = {"Class A": LedState.CLASS_A, "Class B": LedState.CLASS_B, "Rejected": LedState.REJECTED}
 
-DEFAULT_PINS = {"green": 17, "yellow": 23, "blue": 27, "red": 22}
+DEFAULT_PINS = {"green": 17, "yellow": 27, "blue": 22, "red": 23}
 
 
 class LedController:

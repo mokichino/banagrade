@@ -7,6 +7,23 @@ const camera = computed(() => props.pipeline?.camera || {})
 const streamError = ref(false)
 const streamKey = ref(0)
 const streamSrc = computed(() => `${apiBase}/api/camera/preview.mjpg?k=${streamKey.value}`)
+const snapshotBusy = ref(false)
+const snapshotError = ref('')
+async function openSnapshot() {
+  snapshotBusy.value = true
+  snapshotError.value = ''
+  try {
+    const response = await fetch(`${apiBase}/api/camera/snapshot.jpg`)
+    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || `Request failed: ${response.status}`)
+    const url = URL.createObjectURL(await response.blob())
+    window.open(url, '_blank', 'noopener')
+    window.setTimeout(() => URL.revokeObjectURL(url), 60000)
+  } catch (error) {
+    snapshotError.value = error.message
+  } finally {
+    snapshotBusy.value = false
+  }
+}
 watch(() => camera.value.available, available => { if (available) { streamError.value = false; streamKey.value += 1 } })
 
 const illumination = computed(() => {
@@ -31,7 +48,11 @@ const autofocus = computed(() => {
     <div class="camera-preview">
       <img v-if="camera.available && !streamError" :src="streamSrc" alt="Live top-down camera preview of the inspection zone" @error="streamError = true">
       <div v-else class="camera-offline"><strong>Camera unavailable</strong><span>{{ pipeline?.last_error || 'The edge device has not opened the camera.' }}</span></div>
-      <span class="preview-tag">Preview 640×360 · grading uses full resolution</span>
+      <span class="preview-tag">Preview 1280×720 · grading uses {{ camera.resolution || 'full resolution' }}</span>
+    </div>
+    <div class="camera-actions">
+      <button class="secondary-button" :disabled="!camera.available || snapshotBusy" @click="openSnapshot">{{ snapshotBusy ? 'Capturing…' : 'Full-resolution snapshot' }}</button>
+      <span v-if="snapshotError" class="muted small">{{ snapshotError }}</span>
     </div>
     <slot name="below-preview" />
     <dl class="camera-meta">

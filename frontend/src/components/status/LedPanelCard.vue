@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, ref } from 'vue'
+import { request } from '../../composables/useApi.js'
 import { DEMO_SEQUENCE, LAMPS, LED_LEGEND, LED_STATES, lampPattern, ledInfo } from '../../lib/led.js'
 
 const props = defineProps({
@@ -11,6 +12,8 @@ const props = defineProps({
 const mode = ref('live')
 const demoIndex = ref(0)
 const pinned = ref(null)
+const testing = ref(false)
+const testError = ref('')
 let timer
 
 const shownState = computed(() => {
@@ -30,10 +33,29 @@ const hardware = computed(() => {
 })
 
 function stopDemo() { window.clearInterval(timer); timer = undefined }
-function setMode(next) {
+// With the backend in demo mode the cycle drives the physical LEDs, and the board follows the live
+// state so hardware and dashboard stay in step. Without it, fall back to a screen-only preview.
+async function runHardwareTest() {
+  testing.value = true
+  testError.value = ''
+  try {
+    await request('/api/demo/led-test', { method: 'POST' })
+    return true
+  } catch (error) {
+    testError.value = `Hardware LED test unavailable (${error.message}); showing a screen-only preview.`
+    return false
+  } finally {
+    testing.value = false
+  }
+}
+async function setMode(next) {
   stopDemo()
   mode.value = next
   if (next === 'demo') {
+    if (testing.value) return
+    mode.value = 'live'
+    if (await runHardwareTest()) return
+    mode.value = 'demo'
     demoIndex.value = 0
     timer = window.setInterval(() => { demoIndex.value = (demoIndex.value + 1) % DEMO_SEQUENCE.length }, 1800)
   }
@@ -52,10 +74,11 @@ onBeforeUnmount(stopDemo)
       </div>
       <div class="segmented" role="group" aria-label="LED panel mode">
         <button :class="{ active: mode === 'live' }" @click="setMode('live')">Live</button>
-        <button :class="{ active: mode === 'demo' }" @click="setMode('demo')">Demo cycle</button>
+        <button :class="{ active: mode === 'demo' || testing }" :disabled="testing" @click="setMode('demo')">{{ testing ? 'Running…' : 'Demo cycle' }}</button>
       </div>
     </div>
 
+    <p v-if="testError" class="muted small">{{ testError }}</p>
     <div class="led-board" :aria-label="`LED board showing ${info.label}`" role="img">
       <div v-for="lamp in LAMPS" :key="lamp.key" class="lamp">
         <span :key="`${shownState}-${lamp.key}`" :class="['lamp-bulb', lamp.key, pattern[lamp.key]]"></span>

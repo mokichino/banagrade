@@ -50,9 +50,9 @@ describe('LED mirror', () => {
 describe('LED signal board', async () => {
   const { lampPattern } = await import('../led.js')
   it('lights exactly the thesis lamp for each state', () => {
-    expect(lampPattern('ready')).toEqual({ green: 'pulse', yellow: 'off', blue: 'off', red: 'off' })
-    expect(lampPattern('class_a').yellow).toBe('flash')
-    expect(lampPattern('class_b').blue).toBe('flash')
+    expect(lampPattern('ready')).toEqual({ green: 'on', yellow: 'off', blue: 'off', red: 'off' })
+    expect(lampPattern('class_a').yellow).toBe('on')
+    expect(lampPattern('class_b').blue).toBe('on')
     expect(lampPattern('rejected').red).toBe('on')
     expect(lampPattern('booting').red).toBe('slow')
     expect(lampPattern('error').red).toBe('fast')

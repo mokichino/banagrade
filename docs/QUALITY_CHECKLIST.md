@@ -18,7 +18,7 @@ Last updated: 2026-10-13.
 | §3.3.7 | Box coordinates reprojected to the original image coordinate system | Camera captures at 4608×2592; `scale_width_to_reference` guards other sizes | `test_pipeline.py::test_width_from_smaller_frame…` |
 | §3.6.3 | Camera Module 3 at 4608×2592; autofocus locked after the initial calibration | `pipeline._open_camera`, `_lock_focus` | Device check: 4608×2592 RGB888 stream, lens locked at 0.92 dpt |
 | §3.6.4, §3.11 | Hands-free trigger on a stable bunch inside the frame; reset to monitoring once the bunch is removed | `pipeline._run`, `_stable_and_in_frame` (400 ms window, frame-edge margin) | Device check: transient false trigger on a cluttered desk was rejected by the stability gate |
-| §3.6.5 | Green = ready, Yellow = Class A, Blue = Class B, Red = Rejected, rapid red blink for camera blocked or poor lighting. Slow red blink while booting comes from the UI spec. | `backend/app/leds.py`, `frame_health` | `test_leds.py`; device check: GPIO opened on BCM 17/23/27/22 |
+| §3.6.5 | Green = ready, Yellow = Class A, Blue = Class B, Red = Rejected, rapid red blink for camera blocked or poor lighting. Slow red blink while booting comes from the UI spec. | `backend/app/leds.py`, `frame_health` | `test_leds.py`; device check: GPIO opened on BCM 17/27/22/23 (green/yellow/blue/red) |
 | §3.6.2, §3.6.5 | FastAPI + SQLite + Vue 3 + Chart.js on the local Wi-Fi network; live updates | `api.py` (`/ws/live`), `frontend/` | `test_api.py`, `npm run build` |
 | §3 "Database Audit" | Each scan stores scan ID, timestamp, Stage 1 and Stage 2 confidence, final grade, box, threshold, timings, and model names | `storage.save_scan`, `stage2_confidence` migration | `test_storage.py`, `test_pipeline.py` |
 | §4.8.2 | Semantic colour coding identical to the floor LEDs | `style.css` tokens, `lib/grades.js`, `LedIndicator.vue` | `grades.test.js`; validated Class A/B colours for colour-vision-deficiency separation (ΔE 36.8) |
@@ -57,7 +57,7 @@ Last updated: 2026-10-13.
 ## 4. Hardware and deployment
 
 - [x] Raspberry Pi 5, Camera Module 3 (IMX708) and GPIO detected from the project virtualenv.
-- [ ] Confirm the physical LED wiring matches BCM green 17, yellow 23, blue 27, red 22, or set `BANAGRADE_LED_*`.
+- [ ] Confirm the physical LED wiring matches BCM green 17, yellow 27, blue 22, red 23, or set `BANAGRADE_LED_*`.
 - [ ] Verify the 45 cm mounting, ring light, and black velvet on the real sorting table.
 - [ ] Fill §4.7 of the thesis: Stage 1 and Stage 2 latency, end-to-end time, a sustained run duration, scan count and average CPU temperature. The System Status page and `/api/system/telemetry` now provide these values.
 - [ ] Install `deploy/banagrade.service` (now `uvicorn main:app`) and test recovery after reboot and Wi-Fi loss.

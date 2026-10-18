@@ -64,6 +64,9 @@ class PresencePipeline:
     PRESENCE_CONFIDENCE = 0.80
     STABILITY_WINDOW_S = 0.4
     PREVIEW_INTERVAL_S = 0.2
+    PREVIEW_SIZE = (1280, 720)  # operator preview; detection still runs on a 640x360 copy
+    DETECTION_SIZE = (640, 360)
+    SNAPSHOT_BUSY = (PipelineState.CAPTURING, PipelineState.CLASSIFYING, PipelineState.DETECTING, PipelineState.GRADING)
 
     def __init__(self, storage: Storage, inference: Any, leds: LedController | None = None) -> None:
         self.storage = storage
@@ -181,7 +184,7 @@ class PresencePipeline:
         width, height = REFERENCE_RESOLUTION
         config = camera.create_still_configuration(
             main={"size": (width, height), "format": "RGB888"},
-            lores={"size": (640, 360), "format": "RGB888"},
+            lores={"size": self.PREVIEW_SIZE, "format": "RGB888"},
             buffer_count=2,
         )
         camera.configure(config)
@@ -223,15 +226,29 @@ class PresencePipeline:
     # ----------------------------------------------------------------- main loop
     async def _capture_lores(self) -> Any:
         frame = await asyncio.to_thread(self._camera.capture_array, "lores")
+        import cv2
+
         now = time.monotonic()
         if now - self._latest_jpeg_at >= self.PREVIEW_INTERVAL_S:
-            import cv2
-
-            ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
             if ok:
                 self._latest_jpeg = encoded.tobytes()
                 self._latest_jpeg_at = now
-        return frame
+        return cv2.resize(frame, self.DETECTION_SIZE, interpolation=cv2.INTER_AREA)
+
+    async def snapshot_jpeg(self) -> bytes:
+        """One full-resolution frame for the operator; refused while a scan is using the sensor."""
+        if self._camera is None:
+            raise RuntimeError("Camera unavailable")
+        if self.state in self.SNAPSHOT_BUSY:
+            raise RuntimeError("A scan is in progress")
+        import cv2
+
+        image = await asyncio.to_thread(self._camera.capture_array, "main")
+        ok, encoded = await asyncio.to_thread(cv2.imencode, ".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        if not ok:
+            raise RuntimeError("Snapshot encoding failed")
+        return encoded.tobytes()
 
     async def _run(self) -> None:
         await self._set_state(PipelineState.IDLE)

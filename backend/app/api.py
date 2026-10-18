@@ -9,13 +9,13 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse, StreamingResponse
+from fastapi.responses import PlainTextResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import demo
 from .leds import GRADE_TO_LED, LedState
 from .model_inference import UltralyticsInference
-from .pipeline import PresencePipeline
+from .pipeline import PipelineState, PresencePipeline
 from .telemetry import read_telemetry
 from .storage import Storage, calculate_sus, now_iso, scans_csv
 
@@ -131,6 +131,32 @@ async def simulate_scan() -> dict[str, Any]:
     return scan
 
 
+LED_TEST_STEPS = [
+    (LedState.READY, 1.5),
+    (LedState.CAPTURE, 1.0),
+    (LedState.CLASS_A, 2.0),
+    (LedState.CLASS_B, 2.0),
+    (LedState.REJECTED, 2.0),
+    (LedState.BOOTING, 3.0),
+    (LedState.ERROR, 3.0),
+]
+
+
+@app.post("/api/demo/led-test")
+async def led_test(step_scale: float = Query(default=1.0, ge=0.0, le=5.0)) -> dict[str, Any]:
+    """Step the physical LEDs and the dashboard mirror through every state. Only touches LEDs, so it needs no demo mode,
+    but it is refused while the live pipeline is busy with a scan."""
+    if pipeline.state in pipeline.SNAPSHOT_BUSY or pipeline.state is PipelineState.PRESENCE_DETECTED:
+        raise HTTPException(status_code=409, detail="A scan is in progress; try again when the bunch is removed")
+    try:
+        for state, seconds in LED_TEST_STEPS:
+            pipeline.leds.set(state)
+            await asyncio.sleep(seconds * step_scale)
+    finally:
+        pipeline.leds.set(LedState.ERROR if pipeline.state is PipelineState.ERROR else LedState.READY)
+    return {"states": [state.value for state, _ in LED_TEST_STEPS], "hardware": pipeline.leds.hardware_available}
+
+
 @app.get("/api/system/telemetry")
 def system_telemetry() -> dict[str, Any]:
     return read_telemetry(pipeline.started_at, storage)
@@ -152,6 +178,17 @@ async def camera_preview() -> StreamingResponse:
             await asyncio.sleep(0.2)
 
     return StreamingResponse(frames(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+
+@app.get("/api/camera/snapshot.jpg")
+async def camera_snapshot() -> Response:
+    if not pipeline.camera_available:
+        raise HTTPException(status_code=503, detail="Camera unavailable")
+    try:
+        jpeg = await pipeline.snapshot_jpeg()
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/inspection/scans")

@@ -68,7 +68,15 @@ def test_healthy_bunch_is_graded_by_width_threshold(tmp_path, width, grade, led)
     assert '"width_threshold_px":2730.07' in scan["threshold_values"]
     assert pipeline.leds.state is led
     assert [e["event_type"] for e in events][-2:] == ["scan_completed", "fsm_state_changed"]
-    # Stage 1 receives the masked image: background pixels are black.
+    # Stage 1 receives the raw (unmasked) frame, downscaled to 1152 px wide, as the model was trained.
+    stage1_input = inference.stage1_inputs[0]
+    assert stage1_input.shape == (648, 1152, 3)
+    assert stage1_input[0, 0].tolist() == [5, 5, 5]
+
+
+def test_stage1_mask_is_opt_in(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BANAGRADE_STAGE1_MASK", "1")
+    _, _, inference, _, _ = _run("Healthy", 2800.0, tmp_path)
     assert inference.stage1_inputs[0][0, 0].tolist() == [0, 0, 0]
 
 

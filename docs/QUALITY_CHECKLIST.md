@@ -6,14 +6,14 @@ with Operational Analytics Dashboard*. A ticked item means it is implemented and
 by automated tests or a recorded device check. Physical validation items stay open until
 someone performs them on the sorting table.
 
-Last updated: 2026-10-13.
+Last updated: 2026-10-19.
 
 ## 1. Thesis traceability
 
 | Thesis section | Requirement | Where it lives | Evidence |
 |---|---|---|---|
-| §3.3.7, §3.6.4 | RGB→HSV threshold, morphological opening, largest-contour mask applied back to the RGB image, uncropped. Stage 1 gets the masked image, Stage 2 the raw image. | `backend/app/preprocessing.py`, `PresencePipeline._stage1_image` | `test_preprocessing.py`, `test_pipeline.py` (Stage 1 background is black) |
-| §3.5.2, §3.5.4 Rule 1 | Stage 1 YOLO11n-cls (`stage1_best.pt`) Healthy / Unhealthy. Unhealthy terminates as Rejected and Stage 2 is skipped. | `grading.decide_grade`, `pipeline._process_scan` | `test_grading.py`, `test_pipeline.py::test_unhealthy…` |
+| §3.3.7, §3.6.4 | RGB→HSV threshold, morphological opening, largest-contour mask applied back to the RGB image, uncropped. The trained Stage 1 model uses raw frames, so the mask is off by default (`BANAGRADE_STAGE1_MASK=1` enables it). Stage 2 gets the raw image. See section 6, item 4. | `backend/app/preprocessing.py`, `PresencePipeline._stage1_image` | `test_preprocessing.py`, `test_pipeline.py` (Stage 1 gets the raw frame; mask is opt-in) |
+| §3.5.2, §3.5.4 Rule 1 | Stage 1 YOLO11n-cls (`stage1_best.pt`) Healthy / Unhealthy, preprocessed exactly as in training: whole frame squashed to 224×224, scaled to [0, 1], no center crop. Unhealthy terminates as Rejected and Stage 2 is skipped. | `model_inference.classify_with`, `grading.decide_grade`, `pipeline._process_scan` | `test_model_inference.py`, `test_grading.py`, `test_pipeline.py::test_unhealthy…`; app code path on the 225-image held-out test set: 224/225 (Unhealthy recall 0.987), matching the training report |
 | §3.5.3, §3.7.6, §4.4.3 | Stage 2 YOLO11n (`stage2_best.pt`) whole-bunch box. Horizontal width in the 4608×2592 frame: ≥ 2730.07 px is Class A, otherwise Class B. | `grading.py`, `model_inference.detect` (axis = width) | `test_grading.py` boundary tests, `test_pipeline.py` |
 | §3.3.7 | Box coordinates reprojected to the original image coordinate system | Camera captures at 4608×2592; `scale_width_to_reference` guards other sizes | `test_pipeline.py::test_width_from_smaller_frame…` |
 | §3.6.3 | Camera Module 3 at 4608×2592; autofocus locked after the initial calibration | `pipeline._open_camera`, `_lock_focus` | Device check: 4608×2592 RGB888 stream, lens locked at 0.92 dpt |
@@ -48,7 +48,10 @@ Last updated: 2026-10-13.
 - [x] Persist model names, both confidences, timings, the threshold, and the rejection reason for every scan.
 - [x] Record low Stage 1 confidence, missing detections, and runtime errors as technical failures, never as commercial rejects.
 - [x] Pipeline survives camera or model errors: retries every 10 s with the fast-red LED.
-- [ ] Tune `BANAGRADE_HSV_LOWER/UPPER` against the 1,500 hand-masked reference images (§3.3.3). The defaults only drop near-black velvet.
+- [x] Deployed weights match the final training runs (SHA-256 identical to `runs/stage1_final` and `runs/stage2_final` `best.pt`).
+- [x] Stage 1 preprocessing matches training. Ultralytics `predict()` center-crops the 16:9 frame and the HSV mask was not used in training; together they dropped held-out accuracy to 0.724 (Unhealthy recall 0.320). Fixed path: 0.9956 (recall 0.987).
+- [x] Stage 2 detection and width grading in the app reproduce the final test evaluation: on the 150 held-out images every width matches within 0.001 px and every grade matches (127/150, accuracy 0.847). The remaining errors are bunches near the 2730.07 px threshold, not app defects.
+- [ ] Tune `BANAGRADE_HSV_LOWER/UPPER` against the 1,500 hand-masked reference images (§3.3.3). Only needed if Stage 1 is retrained on masked images; the mask is off by default.
 - [ ] Tune `BANAGRADE_MIN_BRIGHTNESS/CONTRAST` on site so the black velvet backdrop never trips the error state.
 - [ ] Train or supply a dedicated YOLO11n-presence model. Until then the Stage 2 detector is the capture trigger.
 - [ ] Run an on-device acceptance test with known Healthy A, Healthy B and Unhealthy bunches.
@@ -78,6 +81,7 @@ document is internally consistent:
 1. **§3.3.7, final paragraph.** It says the reprojection keeps the "pixel-to-centimeter conversion dimensionally accurate". No centimetre conversion exists.
 2. **§3.4.1.** It still defines the deterministic grading function h(L̂) with ≥ 12 cm, 8–12 cm and < 8 cm, and the composite D(x) = h(m(g(x))). It should be D(x) = h(w(g(x))) using the 2730.07 px rule given just above it. It also uses `>` and `<` in the rule; the implementation and `grading_config.txt` use ≥ for Class A.
 3. **§3.5.4 Rules 2–5.** They describe centimetre extraction and a size-based rejection below 8 cm. The evaluated system has no size-based rejection.
+4. **§3.3.7, §3.6.4 (Stage 1 input).** They say Stage 1 receives the HSV-masked image. The final Stage 1 model was trained and tested on raw, unmasked frames (`prepare_stage1.py` copies `dataset/raw`), squashed to 224×224. On the held-out test set, feeding it the masked image lowers accuracy from 0.9956 to 0.911. Either revise the text to say Stage 1 uses the raw frame, or retrain Stage 1 on masked images and set `BANAGRADE_STAGE1_MASK=1`.
 4. **§3.10.3.** It says "converted to cm using the camera calibration factor… or size-based rejection outcomes".
 5. **§3.12.** It says size is determined by "the longitudinal length". The implementation measures the horizontal bounding-box width.
 6. **§4.4.3.** It says "fell below the 2730.07-pixel equivalent for 12 cm" and "pixel-to-centimeter translation". This contradicts §1.6 and §3.4.2, which state the threshold is not a centimetre measurement.

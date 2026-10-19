@@ -16,3 +16,5 @@ backend/*.db-wal
 *.log
 backend/demo.db*
 backend/demo_retrain/
+models/check/
+models/dataset/

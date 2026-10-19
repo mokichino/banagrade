@@ -77,6 +77,9 @@ class PresencePipeline:
         # Pi 5 CPU above 100%; ~4 checks per second is enough to catch a bunch being placed.
         self.presence_interval_s = float(os.getenv("BANAGRADE_PRESENCE_INTERVAL_S", "0.25"))
         self.mask_settings = MaskSettings.from_environment()
+        # The trained Stage 1 model saw raw frames; masking dropped held-out accuracy from 0.996 to 0.911.
+        # Only enable this for a model retrained on HSV-masked images.
+        self.stage1_mask = os.getenv("BANAGRADE_STAGE1_MASK", "0") == "1"
         self.leds = leds or LedController(on_change=self._on_led_change)
         self.state = PipelineState.BOOTING
         self.last_error: str | None = None
@@ -372,13 +375,17 @@ class PresencePipeline:
             await self._emit("scan_completed", {"scan": self.storage.get_scan(scan_id)})
 
     def _stage1_image(self, image: Any) -> Any:
-        """Masked RGB for Stage 1. Masking a downscaled copy is equivalent because Stage 1 resizes to 224 px."""
+        """Raw frame for Stage 1, downscaled to 1152 px wide.
+
+        Stage 1 squashes to 224 px anyway; on the 225-image held-out set the downscale gave identical
+        labels to the full frame and cut classification from ~105 ms to ~37 ms on the Pi 5.
+        """
         import cv2
 
         height, width = image.shape[:2]
         scale = 1152 / width if width > 1152 else 1.0
         small = cv2.resize(image, (int(width * scale), int(height * scale)), interpolation=cv2.INTER_AREA) if scale < 1 else image
-        return stage1_input(small, self.mask_settings)
+        return stage1_input(small, self.mask_settings) if self.stage1_mask else small
 
 
 class LowConfidence(ValueError):

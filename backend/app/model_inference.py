@@ -36,6 +36,32 @@ def pixel_length_from_bbox(bbox_xyxy: tuple[float, float, float, float], axis: s
     raise ValueError("BANAGRADE_LENGTH_AXIS must be 'width' or 'height'")
 
 
+def stage1_transform() -> Any:
+    """Stage 1 evaluation transform used in training: squash the whole frame to 224x224, scale to [0, 1].
+
+    Ultralytics ``predict()`` instead resizes the short side and center-crops, which drops about 44%
+    of a 16:9 frame; on the held-out test set that cut Unhealthy recall from 0.987 to under 0.40.
+    """
+    import torchvision.transforms as T
+
+    return T.Compose([T.Resize((224, 224)), T.ToTensor()])
+
+
+def classify_with(net: Any, transform: Any, names: dict[int, str], bgr: Any) -> tuple[str, float]:
+    """Run the Stage 1 classifier on an OpenCV BGR frame and return (label, probability)."""
+    import cv2
+    import torch
+    from PIL import Image
+
+    batch = transform(Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))).unsqueeze(0)
+    with torch.inference_mode():
+        output = net(batch)
+    # In eval mode the Ultralytics Classify head returns (probabilities, logits).
+    probs = output[0] if isinstance(output, (tuple, list)) else output
+    top1 = int(probs.argmax(1))
+    return str(names[top1]), float(probs[0, top1])
+
+
 class UltralyticsInference:
     def __init__(
         self,
@@ -49,6 +75,8 @@ class UltralyticsInference:
         self.presence_path = Path(presence_path) if presence_path else None
         self.length_axis = length_axis
         self._stage1: Any = None
+        self._stage1_net: Any = None
+        self._stage1_transform: Any = None
         self._stage2: Any = None
         self._presence: Any = None
         self._error: str | None = None
@@ -90,6 +118,8 @@ class UltralyticsInference:
             self._model_errors["stage2"] = "Expected a detector with the banana_bunch class"
             raise ValueError(self._model_errors["stage2"])
         self._stage1, self._stage2 = stage1, stage2
+        self._stage1_net = stage1.model.float().eval()
+        self._stage1_transform = stage1_transform()
         if self.presence_path:
             if self.presence_path.is_file():
                 self._presence = YOLO(str(self.presence_path))
@@ -136,12 +166,10 @@ class UltralyticsInference:
         if not self.available:
             raise RuntimeError("Model inference is not loaded")
         started = time.perf_counter()
-        result = self._stage1.predict(source=image, imgsz=224, verbose=False)[0]
-        top1 = int(result.probs.top1)
-        label = str(result.names[top1])
+        label, confidence = classify_with(self._stage1_net, self._stage1_transform, self._stage1.names, image)
         if label.lower() not in {"healthy", "unhealthy"}:
             raise ValueError(f"Unexpected Stage 1 label: {label}")
-        return Stage1Prediction(label, float(result.probs.top1conf), (time.perf_counter() - started) * 1000)
+        return Stage1Prediction(label, confidence, (time.perf_counter() - started) * 1000)
 
     def detect_presence(self, image: Any, confidence_threshold: float = 0.80) -> tuple[float, float, float, float] | None:
         """Presence trigger: a dedicated YOLO11n-presence model, else the Stage 2 banana_bunch detector."""

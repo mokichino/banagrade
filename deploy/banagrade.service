@@ -1,12 +1,13 @@
 [Unit]
 Description=Banagrade local grading service
-After=network-online.target
-Wants=network-online.target
+# Edge device: grading starts at boot with or without Wi-Fi, so no network-online wait.
 
 [Service]
 Type=simple
 User=banagrade
 Group=banagrade
+# Camera Module 3 (/dev/video*, /dev/media*) and the LED pins (/dev/gpiochip*).
+SupplementaryGroups=video gpio
 WorkingDirectory=/opt/banagrade/backend
 EnvironmentFile=-/etc/banagrade/banagrade.env
 ExecStart=/opt/banagrade/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000

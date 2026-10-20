@@ -12,7 +12,7 @@ The system implements the thesis *A Two-Stage Deep Learning System for Cardava B
 - `backend/app/leds.py` drives the floor LEDs: green ready, yellow Class A, blue Class B, red Rejected, slow red blink while booting, fast red blink on error. The dashboard mirrors the same state.
 - `backend/app/telemetry.py` reads uptime, CPU temperature, fan state, latency and database health from the device. Unavailable readings are `null`, never estimated.
 - `backend/app/storage.py` owns SQLite, shift sessions, analytics, the rejection trend, disputes and SUS scoring.
-- `frontend/` is a Vue 3 + Chart.js app with three pages: Live Dashboard, Recent Scans and System Status.
+- `frontend/` is a Vue 3 + Chart.js app with three pages: Live Dashboard, Recent Scans and System Status. In production the backend serves its build on the same port.
 
 On Raspberry Pi OS, `picamera2`, `libcamera` and `gpiozero` are apt packages. The backend appends `/usr/lib/python3/dist-packages` to `sys.path` when they are missing from the virtualenv, so the venv does not need `--system-site-packages`.
 
@@ -113,9 +113,47 @@ curl http://127.0.0.1:5173/api/health
 
 In each server terminal, press `Ctrl+C`.
 
-The production entry point is `backend/main.py` (`uvicorn main:app`). Production deployment
-is described in `deploy/banagrade.service`. Configuration variables are documented in
-`backend/.env.example`.
+## Production on the Pi (edge deployment)
+
+In production the Pi is the whole system: camera, both models, grading, SQLite, LEDs and the
+dashboard. No cloud service or internet connection is used. The backend serves the built
+dashboard from `frontend/dist` (override with `BANAGRADE_FRONTEND_DIST`), so a single service on
+port 8000 is the full app and Node is only needed to build it. Grading and the floor LEDs run
+whether or not anyone has the dashboard open. Supervisors open `http://<hostname>.local:8000` (this Pi: `http://cardavapi.local:8000`) from
+any phone or laptop on the same Wi-Fi (mDNS via `avahi-daemon`, on by default in Raspberry Pi OS).
+
+Install once (from the repository root):
+
+```bash
+sudo useradd --system --home /opt/banagrade --shell /usr/sbin/nologin banagrade
+(cd frontend && npm run build)
+sudo rsync -a --exclude .git --exclude .venv --exclude frontend/node_modules --exclude models/dataset --exclude models/check --exclude 'backend/*.db*' ./ /opt/banagrade/
+cd /opt/banagrade && sudo python3 -m venv .venv
+sudo .venv/bin/pip install --resume-retries 10 --index-url https://download.pytorch.org/whl/cpu "torch==2.14.1+cpu" "torchvision==0.29.1+cpu"
+sudo .venv/bin/pip install --resume-retries 10 -r backend/requirements-runtime.txt
+sudo mkdir -p /etc/banagrade /var/lib/banagrade/retrain
+sudo cp backend/.env.example /etc/banagrade/banagrade.env
+sudo nano /etc/banagrade/banagrade.env
+sudo chown -R banagrade:banagrade /opt/banagrade /var/lib/banagrade
+sudo cp deploy/banagrade.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now banagrade
+```
+
+PyTorch is installed from the CPU-only index first. The ARM64 wheel on PyPI is a CUDA build that
+pulls about 3 GB of NVIDIA libraries the Pi cannot use; with torch already present, Ultralytics
+keeps the CPU build.
+
+In `nano`, set `BANAGRADE_ENABLE_GPIO=true` once the LEDs are wired, then save with Ctrl+O, Enter,
+Ctrl+X. The production database starts empty in `/var/lib/banagrade`; the development and demo
+databases are not copied.
+
+The unit starts at boot without waiting for Wi-Fi and runs with the `video` and `gpio` groups
+for the camera and LEDs. Check it with `systemctl status banagrade` and
+`journalctl -u banagrade -f`. Scan timestamps rely on the Pi 5 real-time clock when there is no
+internet for NTP, so fit the RTC battery if the device will boot offline.
+
+Configuration variables are documented in `backend/.env.example`. For a quick single-port check
+during development, run `npm run build` in `frontend/` and open port 8000 instead of 5173.
 
 ## Presentation mode (mock data)
 

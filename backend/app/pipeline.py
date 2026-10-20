@@ -117,7 +117,11 @@ class PresencePipeline:
             "stage1_min_confidence": self.stage1_min_conf,
             "width_threshold_px": width_threshold_px(),
             "reference_resolution": list(REFERENCE_RESOLUTION),
-            "preprocessing": "RGB-to-HSV threshold + morphological opening + largest-contour mask (Stage 1); raw RGB (Stage 2)",
+            "preprocessing": (
+                "RGB-to-HSV threshold + morphological opening + largest-contour mask (Stage 1); raw RGB (Stage 2)"
+                if self.stage1_mask
+                else "Raw RGB squashed to 224x224 (Stage 1, as trained); raw RGB (Stage 2)"
+            ),
             "camera": {
                 "available": self.camera_available,
                 "resolution": f"{resolution[0]}x{resolution[1]}" if resolution else None,

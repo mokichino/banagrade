@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import demo
@@ -282,3 +283,10 @@ async def live_socket(websocket: WebSocket) -> None:
             await websocket.receive_text()
     except WebSocketDisconnect:
         events.clients.discard(websocket)
+
+
+# The Pi serves the built dashboard itself, so one service on port 8000 is the whole app
+# and the LAN needs no internet or Node. Mounted last so /api and /ws routes match first.
+frontend_dist = Path(os.getenv("BANAGRADE_FRONTEND_DIST", Path(__file__).resolve().parents[2] / "frontend" / "dist"))
+if (frontend_dist / "index.html").is_file():
+    app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")

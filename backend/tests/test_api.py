@@ -28,6 +28,7 @@ def test_status_reports_disabled_pipeline_without_fabrication(client) -> None:
     assert body["pipeline"]["camera"]["available"] is False
     assert body["pipeline"]["camera"]["resolution"] is None
     assert body["pipeline"]["led"]["state"] == "error"
+    assert body["pipeline"]["preprocessing"].startswith("Raw RGB")  # Stage 1 mask is off by default
     assert {m["label"] for m in body["models"]["models"]} == {"stage1_best.pt", "stage2_best.pt"}
     assert test_client.get("/api/camera/preview.mjpg").status_code == 503
 
@@ -45,3 +46,27 @@ def test_telemetry_and_shift_scoped_analytics(client) -> None:
     new = test_client.post("/api/sessions", json={"notes": "afternoon"}).json()
     assert test_client.get("/api/analytics/summary?session=active").json()["total_scans"] == 0
     assert test_client.get("/api/sessions/active").json()["session"]["id"] == new["id"]
+
+
+def test_serves_built_dashboard_without_shadowing_api(tmp_path, monkeypatch) -> None:
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html><title>Banagrade</title>")
+    (dist / "assets" / "app.js").write_text("console.log('ok')")
+    monkeypatch.setenv("BANAGRADE_FRONTEND_DIST", str(dist))
+    monkeypatch.setenv("BANAGRADE_DB", str(tmp_path / "api.db"))
+    monkeypatch.setenv("BANAGRADE_ENABLE_PIPELINE", "false")
+    monkeypatch.setenv("BANAGRADE_ENABLE_MODEL_INFERENCE", "false")
+    import importlib
+
+    import app.api as api
+
+    api = importlib.reload(api)
+    from fastapi.testclient import TestClient
+
+    with TestClient(api.app) as test_client:
+        assert "Banagrade" in test_client.get("/").text
+        assert test_client.get("/assets/app.js").status_code == 200
+        assert test_client.get("/api/health").json()["status"] == "ok"
+        with test_client.websocket_connect("/ws/live") as socket:
+            assert socket.receive_json()["event_type"] == "system_status"

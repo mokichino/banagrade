@@ -164,9 +164,9 @@ def test_draw_overlay_scales_the_box_and_leaves_the_model_frame_untouched() -> N
 @pytest.mark.parametrize(
     ("second", "stable", "label", "color"),
     [
-        (((101.0, 101.0, 301.0, 251.0), 0.91), True, "Bunch 0.91 · scanning", OVERLAY_READY),
-        (((180.0, 100.0, 380.0, 250.0), 0.91), False, "Bunch 0.91 · moving, hold still", OVERLAY_CHECKING),
-        (((0.0, 100.0, 200.0, 250.0), 0.91), False, "Bunch 0.91 · touching the edge, move it in", OVERLAY_PROBLEM),
+        (((101.0, 101.0, 301.0, 251.0), 0.91, "Stage 2"), True, "Bunch 0.91 (Stage 2) · scanning", OVERLAY_READY),
+        (((180.0, 100.0, 380.0, 250.0), 0.91, "Stage 2"), False, "Bunch 0.91 (Stage 2) · moving, hold still", OVERLAY_CHECKING),
+        (((0.0, 100.0, 200.0, 250.0), 0.91, "backup"), False, "Bunch 0.91 (backup) · touching the edge, move it in", OVERLAY_PROBLEM),
         (None, False, None, None),
     ],
 )
@@ -262,7 +262,7 @@ def test_a_change_runs_the_detectors_and_an_unseen_bunch_is_rechecked(tmp_path, 
 
     placed = _velvet(1)
     placed[90:270, 160:480] = (60, 180, 200)
-    detector.bunch = ((80.0, 45.0, 240.0, 135.0), 0.95)
+    detector.bunch = ((80.0, 45.0, 240.0, 135.0), 0.95, "Stage 2")
     assert asyncio.run(pipeline._presence_check(placed)) == detector.bunch
     assert detector.runs == 2
 
@@ -277,7 +277,7 @@ def test_held_bunch_is_not_rechecked_until_the_frame_changes(tmp_path, monkeypat
     monkeypatch.setattr("app.pipeline.time.monotonic", lambda: 100.0)
     placed = _velvet(1)
     placed[90:270, 160:480] = (60, 180, 200)
-    detector.bunch = ((80.0, 45.0, 240.0, 135.0), 0.95)
+    detector.bunch = ((80.0, 45.0, 240.0, 135.0), 0.95, "Stage 2")
     asyncio.run(pipeline._presence_check(placed))
     pipeline._hold = True  # result shown, waiting for removal
 

@@ -21,7 +21,10 @@ The capture trigger runs on the 640×360 preview at 640 px, and a bunch must hol
 400 ms. It runs the Stage 2 detector first (confidence ≥ 0.80). Stage 2 was trained only on Class A
 and B bunches and on its own misses 9 of the 75 held-out Unhealthy bunches. When it finds nothing,
 the stock COCO-pretrained YOLO11n (the file both trained models started from) looks for its `banana`
-class (confidence ≥ 0.50). Together they trigger on all 225 held-out bunches: 67/67 Class A, 83/83
+class (confidence ≥ 0.50), ignoring any "banana" box that a COCO "person" box (≥ 0.25) covers by
+half or more. On the live camera an open palm with the fingers together scored 0.62 "banana" and
+0.60–0.68 "person", while on the 225 held-out photos no "person" box ever overlapped a bunch. The
+preview label names the model that drew the box (Stage 2 or backup). Together they trigger on all 225 held-out bunches: 67/67 Class A, 83/83
 Class B and 75/75 Unhealthy. This stock model stands in for the YOLO11n-presence model in the thesis
 architecture, which was never trained (`PRESENCE_MODEL.md` describes how to train one). A check takes
 about 225 ms when Stage 2 sees the bunch and about 505 ms on an empty table. To keep an idle Pi cool,
@@ -60,7 +63,7 @@ These test-set numbers are also the baselines for the drift indicators.
 
 ## Automated tests (2026-10-25)
 
-- Backend: `python -m pytest backend/tests -q`, **69 passed**.
+- Backend: `python -m pytest backend/tests -q`, **72 passed**.
 - Frontend: `npm test`, **18 passed**, covering grade logic, LED mapping, PDF export, and the empty
   and error states of the dashboard, history and status pages. `npm run build` succeeds.
 

@@ -6,7 +6,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,13 +62,50 @@ def classify_with(net: Any, transform: Any, names: dict[int, str], bgr: Any) -> 
     return str(names[top1]), float(probs[0, top1])
 
 
-def _best_box(model: Any, image: Any, confidence: float, classes: list[int] | None = None) -> tuple[tuple[float, float, float, float], float] | None:
-    result = model.predict(source=image, conf=confidence, imgsz=640, classes=classes, verbose=False)[0]
+class PresenceHit(NamedTuple):
+    box: tuple[float, float, float, float]
+    confidence: float
+    source: str  # "Stage 2" or "backup", shown on the preview box
+
+
+# A COCO "person" box at least this confident hides the "banana" boxes it covers. An open palm with the
+# fingers together scored 0.62 as "banana" on the live camera, and the hand was also seen as "person"
+# at 0.60-0.68. On the 225 held-out bunch photos no "person" box overlapped the bunch.
+PERSON_CONFIDENCE = 0.25
+PERSON_COVER = 0.5
+
+
+def _covered(inner: list[float], outer: list[float]) -> float:
+    """Share of ``inner`` that lies inside ``outer``."""
+    width = max(0.0, min(inner[2], outer[2]) - max(inner[0], outer[0]))
+    height = max(0.0, min(inner[3], outer[3]) - max(inner[1], outer[1]))
+    return width * height / max(1e-6, (inner[2] - inner[0]) * (inner[3] - inner[1]))
+
+
+def _best_box(model: Any, image: Any, confidence: float) -> PresenceHit | None:
+    result = model.predict(source=image, conf=confidence, imgsz=640, verbose=False)[0]
     if result.boxes is None or len(result.boxes.xyxy) == 0:
         return None
     best = int(result.boxes.conf.argmax())
     box = tuple(float(value) for value in result.boxes.xyxy[best].tolist())
-    return box, float(result.boxes.conf[best])  # type: ignore[return-value]
+    return PresenceHit(box, float(result.boxes.conf[best]), "Stage 2")  # type: ignore[arg-type]
+
+
+def _backup_banana(model: Any, image: Any, confidence: float, banana: list[int], person: list[int]) -> PresenceHit | None:
+    """Best COCO "banana" box that is not mostly covered by a "person" box (a hand)."""
+    result = model.predict(source=image, conf=min(confidence, PERSON_CONFIDENCE), imgsz=640, classes=banana + person, verbose=False)[0]
+    if result.boxes is None or len(result.boxes.xyxy) == 0:
+        return None
+    found = list(zip(result.boxes.cls.tolist(), result.boxes.conf.tolist(), result.boxes.xyxy.tolist()))
+    hands = [xyxy for cls, conf, xyxy in found if int(cls) in person and conf >= PERSON_CONFIDENCE]
+    bananas = [
+        (conf, xyxy) for cls, conf, xyxy in found
+        if int(cls) in banana and conf >= confidence and not any(_covered(xyxy, hand) >= PERSON_COVER for hand in hands)
+    ]
+    if not bananas:
+        return None
+    conf, xyxy = max(bananas)
+    return PresenceHit(tuple(float(value) for value in xyxy), float(conf), "backup")  # type: ignore[arg-type]
 
 
 class UltralyticsInference:
@@ -91,6 +128,7 @@ class UltralyticsInference:
         self._stage2: Any = None
         self._presence: Any = None
         self._presence_classes: list[int] = []
+        self._person_classes: list[int] = []
         self._error: str | None = None
         self._model_errors: dict[str, str] = {}
 
@@ -141,7 +179,7 @@ class UltralyticsInference:
 
         Optional: if it is missing or invalid, the trigger falls back to Stage 2 alone and grading continues.
         """
-        self._presence, self._presence_classes = None, []
+        self._presence, self._presence_classes, self._person_classes = None, [], []
         if self.presence_path is None:
             return
         if not self.presence_path.is_file():
@@ -156,7 +194,8 @@ class UltralyticsInference:
         if presence.task != "detect" or not banana:
             self._model_errors["presence"] = "Expected a detector with a banana class (COCO-pretrained YOLO11n)"
             return
-        self._presence, self._presence_classes = presence, banana
+        person = [index for index, name in presence.names.items() if str(name).strip().lower() == "person"]
+        self._presence, self._presence_classes, self._person_classes = presence, banana, person
 
     @property
     def available(self) -> bool:
@@ -207,19 +246,19 @@ class UltralyticsInference:
 
     def detect_presence(
         self, image: Any, confidence_threshold: float = 0.80
-    ) -> tuple[tuple[float, float, float, float], float] | None:
-        """Capture trigger on the low-resolution preview frame: the best box and its confidence, or None.
+    ) -> PresenceHit | None:
+        """Capture trigger on the low-resolution preview frame: the best box, its confidence and its model, or None.
 
         The Stage 2 detector runs first. It was trained only on Class A and B bunches and misses 9 of the
         75 held-out Unhealthy ones, so when it finds nothing the COCO-pretrained YOLO11n looks for its
-        banana class. Together they find all 225 held-out bunches. Both run at 640 px: at 320 px Stage 2
-        found 1 of 225.
+        banana class, ignoring any banana a hand ("person") covers. Together they find all 225 held-out
+        bunches. Both run at 640 px: at 320 px Stage 2 found 1 of 225.
         """
         if self._stage2 is None:
             return None
         found = _best_box(self._stage2, image, confidence_threshold)
         if found is None and self._presence is not None:
-            found = _best_box(self._presence, image, self.presence_confidence, self._presence_classes)
+            found = _backup_banana(self._presence, image, self.presence_confidence, self._presence_classes, self._person_classes)
         return found
 
     def detect(self, image: Any) -> Stage2Prediction:

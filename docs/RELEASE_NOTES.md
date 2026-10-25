@@ -43,7 +43,10 @@ is held). The box is drawn on a copy for display only.
 - Stage 1 Unhealthy → **Rejected**. Stage 2 does not run.
 - Stage 1 Healthy → horizontal bounding-box width in the 4608×2592 frame. **≥ 2730.07 px is Class A**,
   otherwise **Class B**.
-- Stage 1 confidence below 0.80, a missing detection or a runtime error → **technical failure**. It is
+- Stage 1 confidence below 0.80, no Stage 2 box or a box below 0.90 confidence, or a runtime error →
+  **technical failure**. Every held-out Class A/B bunch scored at least 0.96 on Stage 2. A flat hand on
+  a desk passed the trigger and Stage 1 (0.807) and was graded Class A from a 0.75 box. The 0.90 gate
+  stops that without losing any held-out bunch. It is
   stored and shown, but excluded from acceptance and rejection rates.
 
 The 2730.07 px threshold was chosen on the validation set only. Out of 151 candidate boundaries it had
@@ -63,7 +66,7 @@ These test-set numbers are also the baselines for the drift indicators.
 
 ## Automated tests (2026-10-25)
 
-- Backend: `python -m pytest backend/tests -q`, **72 passed**.
+- Backend: `python -m pytest backend/tests -q`, **73 passed**.
 - Frontend: `npm test`, **18 passed**, covering grade logic, LED mapping, PDF export, and the empty
   and error states of the dashboard, history and status pages. `npm run build` succeeds.
 
@@ -79,6 +82,7 @@ Every variable, with its default, is listed in `backend/.env.example`. Productio
 |---|---|---|
 | `BANAGRADE_WIDTH_THRESHOLD_PX` | 2730.07 | Class A / B boundary |
 | `BANAGRADE_STAGE1_MIN_CONF` | 0.80 | Below this, a scan is a technical failure |
+| `BANAGRADE_STAGE2_MIN_CONF` | 0.90 | A Stage 2 box below this is a technical failure, not a grade |
 | `BANAGRADE_STAGE1_MASK` | 0 | HSV mask before Stage 1. Keep at 0: the model was trained on raw frames and masking lowers test accuracy to 0.911. |
 | `BANAGRADE_MIN_BRIGHTNESS`, `BANAGRADE_MIN_CONTRAST` | 8, 1.5 | Fast-red "camera blocked / poor lighting" error. Tune on site. |
 | `BANAGRADE_ENABLE_GPIO` | false | Drive the physical LEDs (BCM `BANAGRADE_LED_*`: green 17, yellow 27, blue 22, red 23) |

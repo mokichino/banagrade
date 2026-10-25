@@ -129,6 +129,9 @@ class PresencePipeline:
         self.inference = inference
         self.enabled = os.getenv("BANAGRADE_ENABLE_PIPELINE", "true").lower() == "true"
         self.stage1_min_conf = float(os.getenv("BANAGRADE_STAGE1_MIN_CONF", "0.80"))
+        # Every held-out Class A/B bunch scored >= 0.96 at full resolution; a flat hand on a desk scored 0.75
+        # and was graded Class A. A weaker box is a technical failure, never a grade.
+        self.stage2_min_conf = float(os.getenv("BANAGRADE_STAGE2_MIN_CONF", "0.90"))
         # Seconds between presence checks while idle. Running YOLO back-to-back pinned the
         # Pi 5 CPU above 100%. A model check takes ~225 ms when Stage 2 sees the bunch and ~505 ms on an empty
         # table (Stage 2, then the COCO backup); the change check in _presence_check skips most idle ones.
@@ -183,6 +186,7 @@ class PresencePipeline:
             "motion_window_ms": int(self.STABILITY_WINDOW_S * 1000),
             "trigger": dict(self.trigger_stats),
             "stage1_min_confidence": self.stage1_min_conf,
+            "stage2_min_confidence": self.stage2_min_conf,
             "width_threshold_px": width_threshold_px(),
             "reference_resolution": list(REFERENCE_RESOLUTION),
             "preprocessing": (
@@ -447,7 +451,9 @@ class PresencePipeline:
                     width_ref = scale_width_to_reference(stage2.pixel_length, stage2.image_width)
 
             await self._set_state(PipelineState.GRADING)
-            decision = decide_grade(stage1_result, width_ref, threshold, stage2_detected=stage2.detected if stage2 else True)
+            weak_detection = stage2 is not None and stage2.detected and (stage2.confidence or 0.0) < self.stage2_min_conf
+            detected = stage2.detected and not weak_detection if stage2 else True
+            decision = decide_grade(stage1_result, width_ref, threshold, stage2_detected=detected)
             record = {
                 "scan_id": scan_id,
                 "session_id": session_id,
@@ -467,6 +473,7 @@ class PresencePipeline:
                 "image_refs": frame_refs,
                 "model_metadata": {"stage1": self.inference.stage1_path.name, "stage2": self.inference.stage2_path.name},
                 "threshold_values": {"width_threshold_px": threshold, "reference_resolution": list(REFERENCE_RESOLUTION), "axis": self.inference.length_axis},
+                "error_details": f"Stage 2 confidence {stage2.confidence:.2f} is below {self.stage2_min_conf:.2f}" if weak_detection else None,
             }
             await self._set_state(PipelineState.PERSISTING)
             self.storage.save_scan(record)

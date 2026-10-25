@@ -11,7 +11,7 @@ The system implements the thesis *A Two-Stage Deep Learning System for Cardava B
 - `backend/app/pipeline.py` is the presence-triggered FSM. It captures at 4608×2592 on Camera Module 3, locks autofocus after one cycle at boot, and triggers on a stable in-frame detection held for 400 ms. Each result is persisted to SQLite and pushed over `/ws/live`.
 - `backend/app/leds.py` drives the floor LEDs: green ready, yellow Class A, blue Class B, red Rejected, slow red blink while booting, fast red blink on error. The dashboard mirrors the same state.
 - `backend/app/telemetry.py` reads uptime, CPU temperature, fan state, latency and database health from the device. Unavailable readings are `null`, never estimated.
-- `backend/app/storage.py` owns SQLite, shift sessions, analytics, the rejection trend, disputes and SUS scoring.
+- `backend/app/storage.py` owns SQLite, shift sessions, analytics, the rejection trend, and disputes.
 - `frontend/` is a Vue 3 + Chart.js app with three pages: Live Dashboard, Recent Scans and System Status. In production the backend serves its build on the same port.
 
 On Raspberry Pi OS, `picamera2`, `libcamera` and `gpiozero` are apt packages. The backend appends `/usr/lib/python3/dist-packages` to `sys.path` when they are missing from the virtualenv, so the venv does not need `--system-site-packages`.

@@ -25,7 +25,7 @@ Last updated: 2026-10-19.
 | §4.8.3 | Live session metrics, yield ratio, class distribution, rejection-rate trend | `DashboardView.vue`, `/api/analytics/summary?session=active`, `/api/analytics/trend` | `test_storage.py::test_rejection_trend_buckets`, `test_api.py` |
 | §1.6, §3.12 | Traceability and human oversight: audit log, PDF export, operator dispute and correction | `HistoryView.vue`, `lib/pdf.js`, `DisputeModal.vue` | `pdf.test.js` |
 | §4.7 | Latency target under 2 s, uptime, and thermal stability on the Pi 5 | `/api/system/telemetry`, `OperationalSummaryCard.vue` | Device check: CPU 51.8 °C, fan level 1/4 at idle |
-| §3.10.5 | SUS evaluation | Existing SUS endpoint; the SUS tab is still a placeholder | Survey was run in Google Forms (n = 20, mean 89.88) |
+| §3.10.5 | SUS evaluation | Not part of the dashboard; the SUS endpoint and tab were removed | Survey was run in Google Forms (n = 20, mean 89.88) |
 
 ## 2. Frontend and analytics
 

@@ -13,8 +13,7 @@ import SystemStatusView from './views/SystemStatusView.vue'
 const views = [
   { id: 'dashboard', label: 'Live Dashboard', subtitle: 'Live monitoring of Cardava banana grading for packinghouse supervisors' },
   { id: 'history', label: 'Recent Scans', subtitle: 'Audit log and traceability for every graded bunch' },
-  { id: 'status', label: 'System Status', subtitle: 'Camera, edge device, GPIO and AI model health' },
-  { id: 'sus', label: 'SUS Evaluation', subtitle: 'Usability evaluation' }
+  { id: 'status', label: 'System Status', subtitle: 'Camera, edge device, GPIO and AI model health' }
 ]
 const viewFromHash = () => (views.some(view => `#/${view.id}` === window.location.hash) ? window.location.hash.slice(2) : 'dashboard')
 const activeView = ref(viewFromHash())
@@ -57,7 +56,6 @@ function onDisputeSaved() {
       <DashboardView v-if="activeView === 'dashboard'" :refresh-key="refreshKey" @navigate="navigate" @select="selectedScan = $event" @dispute="disputeScan = $event" @error="error = $event" />
       <HistoryView v-else-if="activeView === 'history'" :refresh-key="refreshKey" @select="selectedScan = $event" @dispute="disputeScan = $event" @error="error = $event" />
       <SystemStatusView v-else-if="activeView === 'status'" :led="led" @error="error = $event" />
-      <section v-else class="panel placeholder"><p class="eyebrow">Standby</p><h2>SUS Evaluation</h2><p class="muted">The SUS evaluation workflow is reserved for a later release.</p></section>
     </main>
     <ScanDrawer :scan="selectedScan" @close="selectedScan = null" />
     <DisputeModal :scan="disputeScan" @close="disputeScan = null" @saved="onDisputeSaved" @error="error = $event" />

@@ -15,15 +15,66 @@ import sys
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
+from .frames import save_frame
 from .grading import REFERENCE_RESOLUTION, Stage1Result, decide_grade, scale_width_to_reference, width_threshold_px
 from .leds import LedController, LedState
 from .preprocessing import MaskSettings, frame_health, stage1_input
 from .storage import Storage, now_iso
 
 Publish = Callable[[dict[str, Any]], Awaitable[None]]
+
+# BGR colours for the preview box. Grades match the floor LEDs and the dashboard tokens.
+OVERLAY_CHECKING = (0, 176, 255)  # amber
+OVERLAY_READY = (94, 197, 34)  # green
+OVERLAY_PROBLEM = (38, 38, 220)  # red
+OVERLAY_GRADE = {"Class A": (0, 163, 217), "Class B": (235, 99, 37), "Rejected": (38, 38, 220)}
+OVERLAY_FAILURE = (128, 128, 128)
+
+
+@dataclass(frozen=True, slots=True)
+class PreviewOverlay:
+    box: tuple[float, float, float, float]  # in DETECTION_SIZE coordinates
+    label: str
+    color: tuple[int, int, int]
+    updated_at: float
+
+
+def change_signature(frame: Any) -> Any:
+    """160x90 greyscale copy of a preview frame for the change check (~1 ms on the Pi 5)."""
+    import cv2
+
+    return cv2.cvtColor(cv2.resize(frame, (160, 90), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY).astype("int16")
+
+
+def frame_changed(before: Any, after: Any, level: int = 25, fraction: float = 0.005) -> bool:
+    """True when more than ``fraction`` of pixels changed by more than ``level`` grey levels.
+
+    Counting changed pixels, not the mean difference, ignores sensor noise on the dark velvet but still
+    catches a hand or a bunch entering a corner (0.5% is about a 12×6 px patch of the 160×90 copy).
+    """
+    import numpy as np
+
+    return float(np.mean(np.abs(after - before) > level)) > fraction
+
+
+def draw_overlay(frame: Any, overlay: PreviewOverlay, scale: float) -> Any:
+    """Copy of the preview frame with the trigger's box and status label. Display only; grading never sees it."""
+    import cv2
+
+    image = frame.copy()
+    x1, y1, x2, y2 = (int(round(value * scale)) for value in overlay.box)
+    cv2.rectangle(image, (x1, y1), (x2, y2), overlay.color, 3)
+    font, size, weight = cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2
+    (text_w, text_h), baseline = cv2.getTextSize(overlay.label, font, size, weight)
+    top = y1 - text_h - baseline - 8 if y1 - text_h - baseline - 8 >= 0 else y1 + 3  # inside the box at the top edge
+    cv2.rectangle(image, (x1, top), (x1 + text_w + 12, top + text_h + baseline + 8), overlay.color, cv2.FILLED)
+    cv2.putText(image, overlay.label, (x1 + 6, top + text_h + 4), font, size, (255, 255, 255), weight, cv2.LINE_AA)
+    return image
 
 
 class PipelineState(StrEnum):
@@ -66,6 +117,10 @@ class PresencePipeline:
     PREVIEW_INTERVAL_S = 0.2
     PREVIEW_SIZE = (1280, 720)  # operator preview; detection still runs on a 640x360 copy
     DETECTION_SIZE = (640, 360)
+    OVERLAY_TTL_S = 1.0  # drop a box that no detection has refreshed, so a stale box never lingers
+    # An unchanged empty table (or an unchanged held bunch) skips the detectors, which cost ~505 ms per
+    # check on an empty table. They still run at least this often, for lighting drift and a second look.
+    FORCED_CHECK_S = 2.0
     SNAPSHOT_BUSY = (PipelineState.CAPTURING, PipelineState.CLASSIFYING, PipelineState.DETECTING, PipelineState.GRADING)
 
     def __init__(self, storage: Storage, inference: Any, leds: LedController | None = None) -> None:
@@ -74,12 +129,16 @@ class PresencePipeline:
         self.enabled = os.getenv("BANAGRADE_ENABLE_PIPELINE", "true").lower() == "true"
         self.stage1_min_conf = float(os.getenv("BANAGRADE_STAGE1_MIN_CONF", "0.80"))
         # Seconds between presence checks while idle. Running YOLO back-to-back pinned the
-        # Pi 5 CPU above 100%; ~4 checks per second is enough to catch a bunch being placed.
+        # Pi 5 CPU above 100%. A model check takes ~225 ms when Stage 2 sees the bunch and ~505 ms on an empty
+        # table (Stage 2, then the COCO backup); the change check in _presence_check skips most idle ones.
         self.presence_interval_s = float(os.getenv("BANAGRADE_PRESENCE_INTERVAL_S", "0.25"))
         self.mask_settings = MaskSettings.from_environment()
         # The trained Stage 1 model saw raw frames; masking dropped held-out accuracy from 0.996 to 0.911.
         # Only enable this for a model retrained on HSV-masked images.
         self.stage1_mask = os.getenv("BANAGRADE_STAGE1_MASK", "0") == "1"
+        # Full-resolution frames for disputes; ~0.9 MB each, so the default cap is about 1 GB. 0 disables.
+        self.frame_dir = Path(os.getenv("BANAGRADE_FRAME_DIR", storage.path.parent / "frames"))
+        self.frame_keep = int(os.getenv("BANAGRADE_FRAME_KEEP", "1000"))
         self.leds = leds or LedController(on_change=self._on_led_change)
         self.state = PipelineState.BOOTING
         self.last_error: str | None = None
@@ -95,6 +154,13 @@ class PresencePipeline:
         self._hold = False
         self._latest_jpeg: bytes | None = None
         self._latest_jpeg_at = 0.0
+        self._overlay: PreviewOverlay | None = None
+        self._held_label = "Technical failure"
+        self._held_color = OVERLAY_FAILURE
+        self._reference: Any = None  # change signature of the frame the detectors last ran on
+        self._last_detection: tuple[tuple[float, float, float, float], float] | None = None
+        self._last_model_check = 0.0
+        self.trigger_stats = {"model_checks": 0, "skipped_unchanged": 0}
 
     # ------------------------------------------------------------------ status
     @property
@@ -114,6 +180,7 @@ class PresencePipeline:
             "last_scan_id": self.last_scan_id,
             "led": self.leds.status(),
             "motion_window_ms": int(self.STABILITY_WINDOW_S * 1000),
+            "trigger": dict(self.trigger_stats),
             "stage1_min_confidence": self.stage1_min_conf,
             "width_threshold_px": width_threshold_px(),
             "reference_resolution": list(REFERENCE_RESOLUTION),
@@ -237,7 +304,11 @@ class PresencePipeline:
 
         now = time.monotonic()
         if now - self._latest_jpeg_at >= self.PREVIEW_INTERVAL_S:
-            ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            preview = frame
+            overlay = self._overlay
+            if overlay is not None and now - overlay.updated_at <= self.OVERLAY_TTL_S:
+                preview = draw_overlay(frame, overlay, frame.shape[1] / self.DETECTION_SIZE[0])
+            ok, encoded = cv2.imencode(".jpg", preview, [cv2.IMWRITE_JPEG_QUALITY, 80])
             if ok:
                 self._latest_jpeg = encoded.tobytes()
                 self._latest_jpeg_at = now
@@ -274,37 +345,74 @@ class PresencePipeline:
                 continue
             if self.state is PipelineState.ERROR:
                 self.last_error = None
+                self._reference = None
                 await self._set_state(PipelineState.IDLE)
                 self.leds.set(LedState.READY)
 
-            detection = await asyncio.to_thread(self.inference.detect_presence, frame, self.PRESENCE_CONFIDENCE)
+            detection = await self._presence_check(frame)
             if detection is None:
+                self._overlay = None
                 if self._hold or self.state is not PipelineState.IDLE:
                     self._hold = False
                     await self._set_state(PipelineState.IDLE)
                     self.leds.set(LedState.READY)
                 await asyncio.sleep(self.presence_interval_s)
                 continue
+            box, confidence = detection
             if self._hold:  # result shown until the bunch is removed
+                self._show(box, self._held_label, self._held_color)
                 await asyncio.sleep(self.presence_interval_s)
                 continue
+            self._show(box, f"Bunch {confidence:.2f} · hold still", OVERLAY_CHECKING)
             await self._set_state(PipelineState.PRESENCE_DETECTED)
             await self._emit("presence_detected")
-            if await self._stable_and_in_frame(frame, detection):
+            if await self._stable_and_in_frame(frame, box):
                 await self._process_scan()
                 self._hold = True
+
+    async def _presence_check(self, frame: Any) -> tuple[tuple[float, float, float, float], float] | None:
+        """Run the trigger detectors, or reuse their last answer when nothing in the frame has changed.
+
+        Reuse is limited to the two steady states: an empty table, and a held bunch still sitting there.
+        A bunch that was seen but not yet captured is always checked again.
+        """
+        signature = change_signature(frame)
+        now = time.monotonic()
+        steady = self._last_detection is None or self._hold
+        if (
+            steady
+            and self._reference is not None
+            and now - self._last_model_check < self.FORCED_CHECK_S
+            and not frame_changed(self._reference, signature)
+        ):
+            self.trigger_stats["skipped_unchanged"] += 1
+            return self._last_detection
+        detection = await asyncio.to_thread(self.inference.detect_presence, frame, self.PRESENCE_CONFIDENCE)
+        self.trigger_stats["model_checks"] += 1
+        self._reference, self._last_detection, self._last_model_check = signature, detection, now
+        return detection
+
+    def _show(self, box: tuple[float, float, float, float], label: str, color: tuple[int, int, int]) -> None:
+        self._overlay = PreviewOverlay(box, label, color, time.monotonic())
 
     async def _stable_and_in_frame(self, first_frame: Any, first: tuple[float, float, float, float]) -> bool:
         await asyncio.sleep(self.STABILITY_WINDOW_S)
         second = await self._capture_lores()
-        current = await asyncio.to_thread(self.inference.detect_presence, second, self.PRESENCE_CONFIDENCE)
-        if current is None:
+        detection = await asyncio.to_thread(self.inference.detect_presence, second, self.PRESENCE_CONFIDENCE)
+        if detection is None:
+            self._overlay = None
             return False
+        current, confidence = detection
         height, width = second.shape[:2]
         margin = 2
         if min(current[0], current[1]) <= margin or current[2] >= width - margin or current[3] >= height - margin:
+            self._show(current, f"Bunch {confidence:.2f} · touching the edge, move it in", OVERLAY_PROBLEM)
             return False
-        return max(abs(a - b) for a, b in zip(first, current)) <= max(width, height) * 0.03
+        if max(abs(a - b) for a, b in zip(first, current)) > max(width, height) * 0.03:
+            self._show(current, f"Bunch {confidence:.2f} · moving, hold still", OVERLAY_CHECKING)
+            return False
+        self._show(current, f"Bunch {confidence:.2f} · scanning", OVERLAY_READY)
+        return True
 
     async def _process_scan(self) -> None:
         scan_id = str(uuid.uuid4())
@@ -313,6 +421,9 @@ class PresencePipeline:
         started = time.perf_counter()
         session_id = self.storage.active_session_id()
         threshold = width_threshold_px()
+        image = None
+        stage1 = None
+        frame_refs = [str(self.frame_dir / f"{scan_id}.jpg")] if self.frame_keep > 0 else None
         try:
             await self._set_state(PipelineState.CAPTURING)
             self.leds.set(LedState.CAPTURE)
@@ -352,6 +463,7 @@ class PresencePipeline:
                 "processing_status": "completed",
                 "inference_time_ms": (time.perf_counter() - started) * 1000,
                 "stage_timings": {"stage1_ms": stage1.duration_ms, "stage2_ms": stage2.duration_ms if stage2 else None},
+                "image_refs": frame_refs,
                 "model_metadata": {"stage1": self.inference.stage1_path.name, "stage2": self.inference.stage2_path.name},
                 "threshold_values": {"width_threshold_px": threshold, "reference_resolution": list(REFERENCE_RESOLUTION), "axis": self.inference.length_axis},
             }
@@ -359,8 +471,10 @@ class PresencePipeline:
             self.storage.save_scan(record)
             if decision.is_technical_failure:
                 self.leds.set(LedState.ERROR)
+                self._held_label, self._held_color = "Technical failure", OVERLAY_FAILURE
             else:
                 self.leds.show_grade(decision.grade)
+                self._held_label, self._held_color = str(decision.grade), OVERLAY_GRADE.get(str(decision.grade), OVERLAY_FAILURE)
             await self._emit("scan_completed", {"scan": self.storage.get_scan(scan_id)})
             await self._set_state(PipelineState.HOLD)
         except asyncio.CancelledError:
@@ -370,13 +484,23 @@ class PresencePipeline:
             reason = "LOW_CONFIDENCE" if isinstance(error, LowConfidence) else "PIPELINE_ERROR"
             self.storage.save_scan({
                 "scan_id": scan_id, "session_id": session_id, "captured_at": captured_at, "completed_at": now_iso(),
+                "stage1_status": stage1.label if stage1 else None,
+                "stage1_confidence": stage1.confidence if stage1 else None,
                 "processing_status": "failed", "rejection_reason": reason, "error_details": self.last_error,
                 "inference_time_ms": (time.perf_counter() - started) * 1000,
+                "image_refs": frame_refs if image is not None else None,
             })
             self.leds.set(LedState.ERROR)
+            self._held_label, self._held_color = "Technical failure", OVERLAY_FAILURE
             await self._set_state(PipelineState.HOLD)
             await self._emit("pipeline_error", {"scan_id": scan_id, "error": self.last_error})
             await self._emit("scan_completed", {"scan": self.storage.get_scan(scan_id)})
+        # Written after the result is shown so the JPEG encode does not add to grading latency.
+        if frame_refs and image is not None:
+            try:
+                await asyncio.to_thread(save_frame, self.frame_dir, scan_id, image, self.frame_keep)
+            except Exception as error:  # a full disk must not stop grading
+                self.last_error = f"Frame archive failed: {error}"
 
     def _stage1_image(self, image: Any) -> Any:
         """Raw frame for Stage 1, downscaled to 1152 px wide.

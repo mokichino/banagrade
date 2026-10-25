@@ -2,8 +2,8 @@
 export const LED_STATES = {
   ready: { tone: 'ready', color: 'Green', label: 'System ready', detail: 'Waiting for a bunch in the detection zone' },
   capture: { tone: 'capture', color: 'White burst', label: 'Capturing', detail: 'Snapshot taken' },
-  class_a: { tone: 'class-a', color: 'Yellow', label: 'Class A result', detail: 'Large hand (≥ 12 cm)' },
-  class_b: { tone: 'class-b', color: 'Blue', label: 'Class B result', detail: 'Small hand (8–12 cm)' },
+  class_a: { tone: 'class-a', color: 'Yellow', label: 'Class A result', detail: 'Large hand (width ≥ 2730.07 px)' },
+  class_b: { tone: 'class-b', color: 'Blue', label: 'Class B result', detail: 'Small hand (width < 2730.07 px)' },
   rejected: { tone: 'rejected', color: 'Red', label: 'Rejected', detail: 'Unhealthy at Stage 1' },
   booting: { tone: 'booting', color: 'Slow red blink', label: 'Booting / calibrating', detail: 'Camera starting, autofocus locking' },
   error: { tone: 'error', color: 'Fast red blink', label: 'Hardware error', detail: 'Camera blocked, lighting or pipeline fault' },

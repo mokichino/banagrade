@@ -46,3 +46,77 @@ def test_stage1_squashes_whole_frame_without_center_crop() -> None:
     assert float(batch[0, 0, 112, -1]) == pytest.approx(1.0, abs=0.02)
     assert float(batch[0, 2, 112, -1]) == pytest.approx(0.0, abs=0.02)
     assert (label, confidence) == ("Unhealthy", pytest.approx(0.9))
+
+
+class StubBoxes:
+    def __init__(self, boxes):
+        import torch
+
+        self.xyxy = torch.tensor([b for b, _ in boxes], dtype=torch.float32).reshape(-1, 4)
+        self.conf = torch.tensor([c for _, c in boxes], dtype=torch.float32)
+
+    def __len__(self):
+        return len(self.conf)
+
+
+class StubDetector:
+    def __init__(self, boxes, task="detect", names=None):
+        self.boxes, self.task, self.names = boxes, task, names or {0: "banana_bunch"}
+        self.calls = []
+
+    def predict(self, source, conf, imgsz, classes=None, verbose=False):
+        self.calls.append({"conf": conf, "imgsz": imgsz, "classes": classes})
+        kept = [(b, c) for b, c in self.boxes if c >= conf]
+        return [type("Result", (), {"boxes": StubBoxes(kept)})()]
+
+
+def _inference(stage2, presence=None):
+    from app.model_inference import UltralyticsInference
+
+    inference = UltralyticsInference("s1.pt", "s2.pt")
+    inference._stage2, inference._presence = stage2, presence
+    inference._presence_classes = [46] if presence else []
+    return inference
+
+
+def test_trigger_uses_stage2_first_at_640_px() -> None:
+    pytest.importorskip("torch")
+    stage2 = StubDetector([((10, 20, 300, 200), 0.93)])
+    presence = StubDetector([((0, 0, 50, 50), 0.99)])
+    box, confidence = _inference(stage2, presence).detect_presence(None, 0.80)
+    assert box == (10, 20, 300, 200) and confidence == pytest.approx(0.93)
+    assert stage2.calls == [{"conf": 0.80, "imgsz": 640, "classes": None}]
+    assert presence.calls == []  # the backup only runs when Stage 2 sees nothing
+
+
+def test_trigger_falls_back_to_coco_banana_for_bunches_stage2_misses() -> None:
+    pytest.importorskip("torch")
+    stage2 = StubDetector([((10, 20, 300, 200), 0.40)])  # below the 0.80 trigger gate, e.g. a diseased bunch
+    presence = StubDetector([((12, 22, 298, 205), 0.88)])
+    box, confidence = _inference(stage2, presence).detect_presence(None, 0.80)
+    assert box == (12, 22, 298, 205) and confidence == pytest.approx(0.88)
+    assert presence.calls == [{"conf": 0.50, "imgsz": 640, "classes": [46]}]
+
+
+def test_trigger_without_backup_model_is_stage2_only() -> None:
+    pytest.importorskip("torch")
+    assert _inference(StubDetector([((10, 20, 300, 200), 0.40)])).detect_presence(None, 0.80) is None
+
+
+def test_invalid_or_missing_presence_model_is_reported_without_stopping_grading(tmp_path) -> None:
+    from app.model_inference import UltralyticsInference
+
+    missing = UltralyticsInference("s1.pt", "s2.pt", presence_path=tmp_path / "nope.pt")
+    missing._load_presence(lambda path: None)
+    assert missing._presence is None and "presence" in missing._model_errors
+
+    wrong = tmp_path / "wrong.pt"
+    wrong.write_bytes(b"x")
+    inference = UltralyticsInference("s1.pt", "s2.pt", presence_path=wrong)
+    inference._load_presence(lambda path: StubDetector([], names={0: "person"}))
+    assert inference._presence is None
+    assert "banana class" in inference._model_errors["presence"]
+    assert next(m for m in inference.status()["models"] if m["key"] == "presence")["state"] == "error"
+
+    inference._load_presence(lambda path: StubDetector([], names={0: "person", 46: "banana"}))
+    assert inference._presence_classes == [46]

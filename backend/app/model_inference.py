@@ -62,6 +62,15 @@ def classify_with(net: Any, transform: Any, names: dict[int, str], bgr: Any) -> 
     return str(names[top1]), float(probs[0, top1])
 
 
+def _best_box(model: Any, image: Any, confidence: float, classes: list[int] | None = None) -> tuple[tuple[float, float, float, float], float] | None:
+    result = model.predict(source=image, conf=confidence, imgsz=640, classes=classes, verbose=False)[0]
+    if result.boxes is None or len(result.boxes.xyxy) == 0:
+        return None
+    best = int(result.boxes.conf.argmax())
+    box = tuple(float(value) for value in result.boxes.xyxy[best].tolist())
+    return box, float(result.boxes.conf[best])  # type: ignore[return-value]
+
+
 class UltralyticsInference:
     def __init__(
         self,
@@ -69,16 +78,19 @@ class UltralyticsInference:
         stage2_path: str | Path,
         length_axis: str = "width",
         presence_path: str | Path | None = None,
+        presence_confidence: float = 0.50,
     ) -> None:
         self.stage1_path = Path(stage1_path)
         self.stage2_path = Path(stage2_path)
         self.presence_path = Path(presence_path) if presence_path else None
+        self.presence_confidence = presence_confidence
         self.length_axis = length_axis
         self._stage1: Any = None
         self._stage1_net: Any = None
         self._stage1_transform: Any = None
         self._stage2: Any = None
         self._presence: Any = None
+        self._presence_classes: list[int] = []
         self._error: str | None = None
         self._model_errors: dict[str, str] = {}
 
@@ -89,7 +101,8 @@ class UltralyticsInference:
             os.getenv("BANAGRADE_STAGE1_MODEL", str(project_models / "stage 1" / "stage1_best.pt")),
             os.getenv("BANAGRADE_STAGE2_MODEL", str(project_models / "stage 2" / "stage2_best.pt")),
             os.getenv("BANAGRADE_LENGTH_AXIS", "width"),
-            os.getenv("BANAGRADE_PRESENCE_MODEL") or None,
+            os.getenv("BANAGRADE_PRESENCE_MODEL", str(project_models / "presence" / "yolo11n.pt")) or None,
+            float(os.getenv("BANAGRADE_PRESENCE_CONF", "0.50")),
         )
 
     def load(self) -> None:
@@ -120,12 +133,30 @@ class UltralyticsInference:
         self._stage1, self._stage2 = stage1, stage2
         self._stage1_net = stage1.model.float().eval()
         self._stage1_transform = stage1_transform()
-        if self.presence_path:
-            if self.presence_path.is_file():
-                self._presence = YOLO(str(self.presence_path))
-            else:
-                self._model_errors["presence"] = f"Presence model not found: {self.presence_path}"
+        self._load_presence(YOLO)
         self._error = None
+
+    def _load_presence(self, yolo: Any) -> None:
+        """The COCO-pretrained YOLO11n backs up the Stage 2 detector as the capture trigger.
+
+        Optional: if it is missing or invalid, the trigger falls back to Stage 2 alone and grading continues.
+        """
+        self._presence, self._presence_classes = None, []
+        if self.presence_path is None:
+            return
+        if not self.presence_path.is_file():
+            self._model_errors["presence"] = f"Presence model not found: {self.presence_path}"
+            return
+        try:
+            presence = yolo(str(self.presence_path))
+        except Exception as error:  # a corrupt optional model must not stop grading
+            self._model_errors["presence"] = f"Presence model failed to load: {error}"
+            return
+        banana = [index for index, name in presence.names.items() if str(name).strip().lower() == "banana"]
+        if presence.task != "detect" or not banana:
+            self._model_errors["presence"] = "Expected a detector with a banana class (COCO-pretrained YOLO11n)"
+            return
+        self._presence, self._presence_classes = presence, banana
 
     @property
     def available(self) -> bool:
@@ -146,19 +177,22 @@ class UltralyticsInference:
         return "missing"
 
     def status(self) -> dict[str, Any]:
-        presence_source = "dedicated" if self._presence is not None else "stage2_fallback"
         return {
             "available": self.available,
             "stage1_model": str(self.stage1_path),
             "stage2_model": str(self.stage2_path),
             "presence_model": str(self.presence_path) if self.presence_path else None,
-            "presence_source": presence_source,
             "length_axis": self.length_axis,
             "empirical_threshold_px": float(os.getenv("BANAGRADE_WIDTH_THRESHOLD_PX", "2730.07")),
             "error": self._error,
             "models": [
                 {"key": "stage1", "label": self.stage1_path.name, "architecture": "YOLO11n-cls", "task": "Health screening (Healthy / Unhealthy)", "path": str(self.stage1_path), "state": self._model_state("stage1", self.stage1_path, self._stage1 is not None)},
                 {"key": "stage2", "label": self.stage2_path.name, "architecture": "YOLO11n-det", "task": "Whole-bunch detection (banana_bunch)", "path": str(self.stage2_path), "state": self._model_state("stage2", self.stage2_path, self._stage2 is not None)},
+                *(
+                    [{"key": "presence", "label": self.presence_path.name, "architecture": "YOLO11n-det, COCO-pretrained", "task": "Capture trigger backup (COCO banana class)", "path": str(self.presence_path), "state": self._model_state("presence", self.presence_path, self._presence is not None)}]
+                    if self.presence_path
+                    else []
+                ),
             ],
         }
 
@@ -171,16 +205,22 @@ class UltralyticsInference:
             raise ValueError(f"Unexpected Stage 1 label: {label}")
         return Stage1Prediction(label, confidence, (time.perf_counter() - started) * 1000)
 
-    def detect_presence(self, image: Any, confidence_threshold: float = 0.80) -> tuple[float, float, float, float] | None:
-        """Presence trigger: a dedicated YOLO11n-presence model, else the Stage 2 banana_bunch detector."""
-        model = self._presence or self._stage2
-        if model is None:
+    def detect_presence(
+        self, image: Any, confidence_threshold: float = 0.80
+    ) -> tuple[tuple[float, float, float, float], float] | None:
+        """Capture trigger on the low-resolution preview frame: the best box and its confidence, or None.
+
+        The Stage 2 detector runs first. It was trained only on Class A and B bunches and misses 9 of the
+        75 held-out Unhealthy ones, so when it finds nothing the COCO-pretrained YOLO11n looks for its
+        banana class. Together they find all 225 held-out bunches. Both run at 640 px: at 320 px Stage 2
+        found 1 of 225.
+        """
+        if self._stage2 is None:
             return None
-        result = model.predict(source=image, conf=confidence_threshold, imgsz=320, verbose=False)[0]
-        if result.boxes is None or len(result.boxes.xyxy) == 0:
-            return None
-        best = int(result.boxes.conf.argmax())
-        return tuple(float(value) for value in result.boxes.xyxy[best].tolist())  # type: ignore[return-value]
+        found = _best_box(self._stage2, image, confidence_threshold)
+        if found is None and self._presence is not None:
+            found = _best_box(self._presence, image, self.presence_confidence, self._presence_classes)
+        return found
 
     def detect(self, image: Any) -> Stage2Prediction:
         if not self.available:

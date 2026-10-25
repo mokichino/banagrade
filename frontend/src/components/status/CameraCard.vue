@@ -48,7 +48,7 @@ const autofocus = computed(() => {
     <div class="camera-preview">
       <img v-if="camera.available && !streamError" :src="streamSrc" alt="Live top-down camera preview of the inspection zone" @error="streamError = true">
       <div v-else class="camera-offline"><strong>Camera unavailable</strong><span>{{ pipeline?.last_error || 'The edge device has not opened the camera.' }}</span></div>
-      <span class="preview-tag">Preview 1280×720 · grading uses {{ camera.resolution || 'full resolution' }}</span>
+      <span class="preview-tag">Preview 1280×720 · box = what the capture trigger sees · grading uses {{ camera.resolution || 'full resolution' }}</span>
     </div>
     <div class="camera-actions">
       <button class="secondary-button" :disabled="!camera.available || snapshotBusy" @click="openSnapshot">{{ snapshotBusy ? 'Capturing…' : 'Full-resolution snapshot' }}</button>

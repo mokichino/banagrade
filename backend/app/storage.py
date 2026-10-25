@@ -6,6 +6,7 @@ import json
 import shutil
 import sqlite3
 import uuid
+import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -109,6 +110,8 @@ class Storage:
                 connection.execute("ALTER TABLE scan_disputes ADD COLUMN corrected_grade TEXT")
             if "archived_frames" not in columns:
                 connection.execute("ALTER TABLE scan_disputes ADD COLUMN archived_frames TEXT")
+            if "original_grade" not in columns:
+                connection.execute("ALTER TABLE scan_disputes ADD COLUMN original_grade TEXT")
             scan_columns = {row["name"] for row in connection.execute("PRAGMA table_info(scans)")}
             if "stage2_confidence" not in scan_columns:
                 connection.execute("ALTER TABLE scans ADD COLUMN stage2_confidence REAL")
@@ -129,6 +132,12 @@ class Storage:
             scan = connection.execute("SELECT * FROM scans WHERE scan_id = ?", (scan_id,)).fetchone()
             if scan is None:
                 raise KeyError(scan_id)
+            # A correction overwrites final_grade, so keep the model's own grade from the first dispute.
+            first = connection.execute(
+                "SELECT original_grade FROM scan_disputes WHERE scan_id = ? AND original_grade IS NOT NULL ORDER BY created_at, rowid LIMIT 1",
+                (scan_id,),
+            ).fetchone()
+            original_grade = first["original_grade"] if first else (scan["final_grade"] or "Technical Failure")
             archived: list[str] = []
             image_refs = json.loads(scan["image_refs"]) if scan["image_refs"] else []
             if isinstance(image_refs, str):
@@ -142,13 +151,48 @@ class Storage:
                     shutil.copy2(source, target)
                     archived.append(str(target))
             connection.execute(
-                "INSERT INTO scan_disputes (id, scan_id, reason, corrected_grade, archived_frames, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (dispute_id, scan_id, reason, corrected_grade, json.dumps(archived), now_iso()),
+                "INSERT INTO scan_disputes (id, scan_id, reason, corrected_grade, original_grade, archived_frames, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (dispute_id, scan_id, reason, corrected_grade, original_grade, json.dumps(archived), now_iso()),
             )
             if corrected_grade:
                 stored_grade = None if corrected_grade == "Technical Failure" else corrected_grade
                 connection.execute("UPDATE scans SET final_grade = ? WHERE scan_id = ?", (stored_grade, scan_id))
-        return {"id": dispute_id, "scan_id": scan_id, "reason": reason, "corrected_grade": corrected_grade, "archived_frames": archived}
+        return {"id": dispute_id, "scan_id": scan_id, "reason": reason, "corrected_grade": corrected_grade, "original_grade": original_grade, "archived_frames": archived}
+
+    def disputed_scans(self) -> list[dict[str, Any]]:
+        """One row per disputed scan: the model's grade, the latest operator correction, and archived frames."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT s.scan_id, s.captured_at, s.stage1_status, s.stage1_confidence, s.stage2_confidence,
+                       s.pixel_length, s.rejection_reason, s.final_grade,
+                       (SELECT original_grade FROM scan_disputes d WHERE d.scan_id = s.scan_id AND original_grade IS NOT NULL ORDER BY created_at, rowid LIMIT 1) AS model_grade,
+                       (SELECT corrected_grade FROM scan_disputes d WHERE d.scan_id = s.scan_id AND corrected_grade IS NOT NULL ORDER BY created_at DESC, rowid DESC LIMIT 1) AS corrected_grade,
+                       (SELECT reason FROM scan_disputes d WHERE d.scan_id = s.scan_id ORDER BY created_at DESC, rowid DESC LIMIT 1) AS reason,
+                       (SELECT archived_frames FROM scan_disputes d WHERE d.scan_id = s.scan_id ORDER BY created_at DESC, rowid DESC LIMIT 1) AS archived_frames,
+                       (SELECT MAX(created_at) FROM scan_disputes d WHERE d.scan_id = s.scan_id) AS disputed_at
+                FROM scans s
+                WHERE EXISTS (SELECT 1 FROM scan_disputes d WHERE d.scan_id = s.scan_id)
+                ORDER BY s.captured_at
+                """
+            ).fetchall()
+        return [{**dict(row), "archived_frames": json.loads(row["archived_frames"] or "[]")} for row in rows]
+
+    def recent_scans_with_disputes(self, limit: int) -> list[dict[str, Any]]:
+        """The newest scans for drift checks, with the model's grade restored for disputed scans."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT s.stage1_status, s.stage1_confidence, s.stage2_detected, s.stage2_confidence,
+                       s.final_grade, s.processing_status, s.rejection_reason,
+                       (SELECT original_grade FROM scan_disputes d WHERE d.scan_id = s.scan_id AND original_grade IS NOT NULL ORDER BY created_at, rowid LIMIT 1) AS model_grade,
+                       (SELECT corrected_grade FROM scan_disputes d WHERE d.scan_id = s.scan_id AND corrected_grade IS NOT NULL ORDER BY created_at DESC, rowid DESC LIMIT 1) AS corrected_grade,
+                       EXISTS (SELECT 1 FROM scan_disputes d WHERE d.scan_id = s.scan_id) AS disputed
+                FROM scans s ORDER BY s.captured_at DESC LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def create_session(self, notes: str | None = None) -> dict[str, Any]:
         session = {"id": str(uuid.uuid4()), "started_at": now_iso(), "status": "open", "notes": notes}
@@ -285,6 +329,31 @@ class Storage:
             return True
         except sqlite3.Error:
             return False
+
+
+DISPUTE_LABEL_FIELDS = (
+    "scan_id", "captured_at", "disputed_at", "model_grade", "corrected_grade", "reason", "stage1_status",
+    "stage1_confidence", "stage2_confidence", "pixel_length", "rejection_reason", "frame",
+)
+
+
+def disputes_zip(disputes: list[dict[str, Any]], target: Path) -> Path:
+    """Write labels.csv and each archived frame under frames/<corrected grade>/. JPEGs are stored, not recompressed."""
+    labels = io.StringIO()
+    writer = csv.DictWriter(labels, fieldnames=DISPUTE_LABEL_FIELDS, extrasaction="ignore")
+    writer.writeheader()
+    with zipfile.ZipFile(target, "w", zipfile.ZIP_STORED) as archive:
+        for dispute in disputes:
+            folder = (dispute["corrected_grade"] or "unlabelled").replace(" ", "_")
+            frame = ""
+            for path in map(Path, dispute["archived_frames"]):
+                if path.is_file():
+                    frame = f"frames/{folder}/{path.name}"
+                    archive.write(path, frame)
+                    break
+            writer.writerow({**dispute, "frame": frame})
+        archive.writestr("labels.csv", labels.getvalue())
+    return target
 
 
 def scans_csv(records: list[dict[str, Any]]) -> str:

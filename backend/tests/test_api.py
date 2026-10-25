@@ -29,7 +29,7 @@ def test_status_reports_disabled_pipeline_without_fabrication(client) -> None:
     assert body["pipeline"]["camera"]["resolution"] is None
     assert body["pipeline"]["led"]["state"] == "error"
     assert body["pipeline"]["preprocessing"].startswith("Raw RGB")  # Stage 1 mask is off by default
-    assert {m["label"] for m in body["models"]["models"]} == {"stage1_best.pt", "stage2_best.pt"}
+    assert [m["label"] for m in body["models"]["models"]] == ["stage1_best.pt", "stage2_best.pt", "yolo11n.pt"]
     assert test_client.get("/api/camera/preview.mjpg").status_code == 503
 
 
@@ -70,3 +70,55 @@ def test_serves_built_dashboard_without_shadowing_api(tmp_path, monkeypatch) -> 
         assert test_client.get("/api/health").json()["status"] == "ok"
         with test_client.websocket_connect("/ws/live") as socket:
             assert socket.receive_json()["event_type"] == "system_status"
+
+
+def test_presence_model_can_be_disabled(monkeypatch) -> None:
+    from app.model_inference import UltralyticsInference
+
+    monkeypatch.setenv("BANAGRADE_PRESENCE_MODEL", "")
+    inference = UltralyticsInference.from_environment()
+    assert inference.presence_path is None
+    assert [m["key"] for m in inference.status()["models"]] == ["stage1", "stage2"]
+
+
+def test_drift_endpoint_reports_insufficient_data_on_empty_database(client) -> None:
+    test_client, _ = client
+    body = test_client.get("/api/system/drift").json()
+    assert body["status"] == "insufficient_data"
+    assert len(body["indicators"]) == 6
+
+
+def test_dispute_export_zip(client, tmp_path, monkeypatch) -> None:
+    import io
+    import zipfile
+
+    test_client, api = client
+    monkeypatch.setenv("BANAGRADE_RETRAIN_DIR", str(tmp_path / "retrain"))
+    frame = tmp_path / "f.jpg"
+    frame.write_bytes(b"\xff\xd8")
+    api.storage.save_scan({"scan_id": "z1", "captured_at": "2026-10-25T08:00:00+00:00", "final_grade": "Class A", "processing_status": "completed", "image_refs": [str(frame)]})
+    dispute = test_client.post("/api/inspection/scans/z1/dispute", json={"corrected_grade": "Class B"}).json()
+    assert dispute["original_grade"] == "Class A"
+
+    response = test_client.get("/api/exports/disputes.zip")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/zip"
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        assert sorted(archive.namelist()) == ["frames/Class_B/z1_f.jpg", "labels.csv"]
+
+
+def test_csv_export_round_trips_every_stored_value(client) -> None:
+    import csv
+    import io
+
+    test_client, api = client
+    tricky = 'Bruise, "soft" spot\nnear the crown'
+    api.storage.save_scan({"scan_id": "c1", "captured_at": "2026-10-25T08:00:00+00:00", "final_grade": "Class A", "processing_status": "completed",
+                           "bbox_coords": [1.5, 2.0, 2900.25, 900.0], "threshold_values": {"width_threshold_px": 2730.07}, "error_details": tricky})
+    api.storage.save_scan({"scan_id": "c2", "captured_at": "2026-10-25T08:01:00+00:00", "final_grade": None, "processing_status": "failed", "rejection_reason": "LOW_CONFIDENCE"})
+    rows = list(csv.DictReader(io.StringIO(test_client.get("/api/exports/scans.csv").text)))
+    stored = {scan["scan_id"]: scan for scan in api.storage.list_scans(100, 0)}
+    assert len(rows) == len(stored) == 2
+    for row in rows:
+        assert row == {key: "" if value is None else str(value) for key, value in stored[row["scan_id"]].items()}
+    assert next(row for row in rows if row["scan_id"] == "c1")["error_details"] == tricky

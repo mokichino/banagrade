@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import tempfile
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -9,16 +10,18 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 
 from . import demo
+from .drift import drift_report
 from .leds import GRADE_TO_LED, LedState
 from .model_inference import UltralyticsInference
 from .pipeline import PipelineState, PresencePipeline
 from .telemetry import read_telemetry
-from .storage import Storage, now_iso, scans_csv
+from .storage import Storage, disputes_zip, now_iso, scans_csv
 
 
 class SessionRequest(BaseModel):
@@ -158,6 +161,11 @@ def system_telemetry() -> dict[str, Any]:
     return read_telemetry(pipeline.started_at, storage)
 
 
+@app.get("/api/system/drift")
+def system_drift() -> dict[str, Any]:
+    return drift_report(storage)
+
+
 @app.get("/api/camera/preview.mjpg")
 async def camera_preview() -> StreamingResponse:
     if not pipeline.camera_available:
@@ -251,6 +259,20 @@ def config() -> dict[str, Any]:
 @app.get("/api/exports/scans.csv", response_class=PlainTextResponse)
 def export_scans() -> PlainTextResponse:
     return PlainTextResponse(scans_csv(storage.list_scans(100000, 0)), media_type="text/csv")
+
+
+@app.get("/api/exports/disputes.zip")
+def export_disputes() -> FileResponse:
+    """Disputed frames sorted by the operator's corrected grade, plus labels.csv, for offline review before retraining."""
+    archive = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+    archive.close()
+    disputes_zip(storage.disputed_scans(), Path(archive.name))
+    return FileResponse(
+        archive.name,
+        media_type="application/zip",
+        filename=f"banagrade-disputes-{now_iso()[:10]}.zip",
+        background=BackgroundTask(os.unlink, archive.name),
+    )
 
 
 @app.websocket("/ws/live")

@@ -29,8 +29,9 @@ class FakeInference:
     stage2_path = Path("stage2_best.pt")
     available = True
 
-    def __init__(self, label: str, width_px: float, image_width: int = 4608, confidence: float = 0.97) -> None:
+    def __init__(self, label: str, width_px: float, image_width: int = 4608, confidence: float = 0.97, stage2_confidence: float = 0.93) -> None:
         self.label, self.width_px, self.image_width, self.confidence = label, width_px, image_width, confidence
+        self.stage2_confidence = stage2_confidence
         self.stage1_inputs = []
         self.stage2_calls = 0
 
@@ -40,7 +41,7 @@ class FakeInference:
 
     def detect(self, image):
         self.stage2_calls += 1
-        return Stage2Prediction(True, (100.0, 50.0, 100.0 + self.width_px, 900.0), self.width_px, 0.93, 30.0, self.image_width, 2592)
+        return Stage2Prediction(True, (100.0, 50.0, 100.0 + self.width_px, 900.0), self.width_px, self.stage2_confidence, 30.0, self.image_width, 2592)
 
 
 def _run(label: str, width_px: float, tmp_path: Path, image_width: int = 4608, confidence: float = 0.97):
@@ -287,3 +288,24 @@ def test_held_bunch_is_not_rechecked_until_the_frame_changes(tmp_path, monkeypat
     detector.bunch = None  # bunch lifted off the table
     assert asyncio.run(pipeline._presence_check(_velvet(2))) is None
     assert detector.runs == 2
+
+
+def test_weak_stage2_box_is_a_technical_failure_not_a_grade(tmp_path) -> None:
+    storage = Storage(tmp_path / "p.db")
+    storage.initialize()
+    # The live hand scan: Stage 1 Healthy 0.807, Stage 2 box 0.75 over hand, laptop and desk, 3010 px wide.
+    inference = FakeInference("Healthy", 3010.0, confidence=0.807, stage2_confidence=0.75)
+    pipeline = PresencePipeline(storage, inference, LedController(outputs=None))
+    pipeline._camera = FakeCamera()
+
+    async def publish(event):
+        pass
+
+    pipeline._publish = publish
+    asyncio.run(pipeline._process_scan())
+    scan = storage.get_scan(pipeline.last_scan_id)
+    assert scan["final_grade"] is None
+    assert scan["rejection_reason"] == "DETECTION_FAILED"
+    assert scan["error_details"] == "Stage 2 confidence 0.75 is below 0.90"
+    assert pipeline.leds.state is LedState.ERROR
+    assert pipeline._held_label == "Technical failure"

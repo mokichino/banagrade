@@ -18,16 +18,11 @@ from .leds import GRADE_TO_LED, LedState
 from .model_inference import UltralyticsInference
 from .pipeline import PipelineState, PresencePipeline
 from .telemetry import read_telemetry
-from .storage import Storage, calculate_sus, now_iso, scans_csv
+from .storage import Storage, now_iso, scans_csv
 
 
 class SessionRequest(BaseModel):
     notes: str | None = Field(default=None, max_length=500)
-
-
-class SusRequest(BaseModel):
-    responses: list[int] = Field(min_length=10, max_length=10)
-    respondent_id: str | None = Field(default=None, max_length=100)
 
 
 class DisputeRequest(BaseModel):
@@ -251,21 +246,6 @@ def config() -> dict[str, Any]:
     with storage.connect() as connection:
         row = connection.execute("SELECT * FROM system_config WHERE id = 1").fetchone()
     return dict(row)
-
-
-@app.post("/api/sus/responses", status_code=201)
-def submit_sus(payload: SusRequest) -> dict[str, Any]:
-    try:
-        converted, score = calculate_sus(payload.responses)
-    except ValueError as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
-    survey_id = str(uuid.uuid4())
-    with storage.connect() as connection:
-        connection.execute(
-            "INSERT INTO sus_responses VALUES (?, ?, ?, ?, ?, ?)",
-            (survey_id, payload.respondent_id, now_iso(), str(payload.responses), str(converted), score),
-        )
-    return {"survey_id": survey_id, "converted_scores": converted, "total_score": score}
 
 
 @app.get("/api/exports/scans.csv", response_class=PlainTextResponse)

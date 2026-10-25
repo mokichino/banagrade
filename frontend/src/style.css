@@ -112,7 +112,6 @@ nav { display: grid; gap: 3px; }
 .panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
 .alert { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; border: 1px solid #f2c3c7; border-radius: var(--radius-sm); padding: 10px 14px; color: var(--reject-ink); background: var(--reject-soft); font-size: 13px; line-height: 1.45; }
 .alert.compact { margin: 12px 0 0; }
-.placeholder { min-height: 220px; }
 .ok { color: var(--green) !important; }
 .warn { color: var(--warn-ink) !important; }
 .bad { color: var(--reject-ink) !important; }

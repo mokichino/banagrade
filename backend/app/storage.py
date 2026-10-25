@@ -62,14 +62,6 @@ CREATE TABLE IF NOT EXISTS config_audit (
     changed_at TEXT NOT NULL,
     operator_id TEXT
 );
-CREATE TABLE IF NOT EXISTS sus_responses (
-    survey_id TEXT PRIMARY KEY,
-    respondent_id TEXT,
-    submitted_at TEXT NOT NULL,
-    responses TEXT NOT NULL,
-    converted_scores TEXT NOT NULL,
-    total_score REAL NOT NULL CHECK(total_score >= 0 AND total_score <= 100)
-);
 CREATE TABLE IF NOT EXISTS system_events (
     event_id TEXT PRIMARY KEY,
     occurred_at TEXT NOT NULL,
@@ -293,13 +285,6 @@ class Storage:
             return True
         except sqlite3.Error:
             return False
-
-
-def calculate_sus(responses: list[int]) -> tuple[list[int], float]:
-    if len(responses) != 10 or any(response not in range(1, 6) for response in responses):
-        raise ValueError("SUS requires exactly ten responses from 1 through 5")
-    converted = [response - 1 if index % 2 == 0 else 5 - response for index, response in enumerate(responses)]
-    return converted, sum(converted) * 2.5
 
 
 def scans_csv(records: list[dict[str, Any]]) -> str:

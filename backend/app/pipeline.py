@@ -23,6 +23,7 @@ from typing import Any
 from .frames import save_frame
 from .grading import REFERENCE_RESOLUTION, Stage1Result, decide_grade, scale_width_to_reference, width_threshold_px
 from .leds import LedController, LedState
+from .model_inference import PresenceHit
 from .preprocessing import MaskSettings, frame_health, stage1_input
 from .storage import Storage, now_iso
 
@@ -158,7 +159,7 @@ class PresencePipeline:
         self._held_label = "Technical failure"
         self._held_color = OVERLAY_FAILURE
         self._reference: Any = None  # change signature of the frame the detectors last ran on
-        self._last_detection: tuple[tuple[float, float, float, float], float] | None = None
+        self._last_detection: PresenceHit | None = None
         self._last_model_check = 0.0
         self.trigger_stats = {"model_checks": 0, "skipped_unchanged": 0}
 
@@ -358,19 +359,19 @@ class PresencePipeline:
                     self.leds.set(LedState.READY)
                 await asyncio.sleep(self.presence_interval_s)
                 continue
-            box, confidence = detection
+            box, confidence, source = detection
             if self._hold:  # result shown until the bunch is removed
                 self._show(box, self._held_label, self._held_color)
                 await asyncio.sleep(self.presence_interval_s)
                 continue
-            self._show(box, f"Bunch {confidence:.2f} · hold still", OVERLAY_CHECKING)
+            self._show(box, f"Bunch {confidence:.2f} ({source}) · hold still", OVERLAY_CHECKING)
             await self._set_state(PipelineState.PRESENCE_DETECTED)
             await self._emit("presence_detected")
             if await self._stable_and_in_frame(frame, box):
                 await self._process_scan()
                 self._hold = True
 
-    async def _presence_check(self, frame: Any) -> tuple[tuple[float, float, float, float], float] | None:
+    async def _presence_check(self, frame: Any) -> PresenceHit | None:
         """Run the trigger detectors, or reuse their last answer when nothing in the frame has changed.
 
         Reuse is limited to the two steady states: an empty table, and a held bunch still sitting there.
@@ -402,16 +403,16 @@ class PresencePipeline:
         if detection is None:
             self._overlay = None
             return False
-        current, confidence = detection
+        current, confidence, source = detection
         height, width = second.shape[:2]
         margin = 2
         if min(current[0], current[1]) <= margin or current[2] >= width - margin or current[3] >= height - margin:
-            self._show(current, f"Bunch {confidence:.2f} · touching the edge, move it in", OVERLAY_PROBLEM)
+            self._show(current, f"Bunch {confidence:.2f} ({source}) · touching the edge, move it in", OVERLAY_PROBLEM)
             return False
         if max(abs(a - b) for a, b in zip(first, current)) > max(width, height) * 0.03:
-            self._show(current, f"Bunch {confidence:.2f} · moving, hold still", OVERLAY_CHECKING)
+            self._show(current, f"Bunch {confidence:.2f} ({source}) · moving, hold still", OVERLAY_CHECKING)
             return False
-        self._show(current, f"Bunch {confidence:.2f} · scanning", OVERLAY_READY)
+        self._show(current, f"Bunch {confidence:.2f} ({source}) · scanning", OVERLAY_READY)
         return True
 
     async def _process_scan(self) -> None:

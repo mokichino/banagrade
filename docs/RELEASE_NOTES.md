@@ -10,33 +10,31 @@ the thesis.
 |---|---|---|---|---|
 | 1 | `models/stage 1/stage1_best.pt` | YOLO11n-cls | Healthy / Unhealthy | `f75fc364fdca64c1ccece94d15680f466de843c54bf9bc3d097e375604cd36ec` |
 | 2 | `models/stage 2/stage2_best.pt` | YOLO11n detect | `banana_bunch` | `863b3d1f582b84d99bd7f656a841aae6b71cf92d0777b972fcdbb388b8a8ce9c` |
-| Trigger backup | `models/presence/yolo11n.pt` | YOLO11n detect, stock COCO-pretrained (not trained by the team) | COCO class 46 `banana` | `0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1` |
+| Trigger | `models/presence/best.pt` | YOLO11n-presence, trained by the team (2026-10-26, run `presence_final`, Stage 2 settings) | `banana_bunch` (all grades) | `5d800e003143ae5734f2344004896da570ef49a129efa7464de1c3cd3b450c25` |
+| Fallback trigger (unused) | `models/presence/yolo11n.pt` | YOLO11n detect, stock COCO-pretrained | COCO class 46 `banana` | `0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1` |
 
 Both files are byte-identical to `training/runs/stage1_final/weights/best.pt` and
 `training/runs/stage2_final/weights/best.pt`. Stage 1 uses tuning trial 04 (lr 0.000849, batch 8,
 weight decay 0.000605, dropout 0.143204). Stage 2 uses trial 02 (lr 0.000867, batch 4, weight decay
 0.000763). Both used AdamW and seed 42.
 
-The capture trigger runs on the 640×360 preview at 640 px, and a bunch must hold still in frame for
-400 ms. It runs the Stage 2 detector first (confidence ≥ 0.80). Stage 2 was trained only on Class A
-and B bunches and on its own misses 9 of the 75 held-out Unhealthy bunches. When it finds nothing,
-the stock COCO-pretrained YOLO11n (the file both trained models started from) looks for its `banana`
-class (confidence ≥ 0.50), ignoring any "banana" box that a COCO "person" box (≥ 0.25) covers by
-half or more. On the live camera an open palm with the fingers together scored 0.62 "banana" and
-0.60–0.68 "person", while on the 225 held-out photos no "person" box ever overlapped a bunch. The
-preview label names the model that drew the box (Stage 2 or backup). Together they trigger on all 225 held-out bunches: 67/67 Class A, 83/83
-Class B and 75/75 Unhealthy. This stock model stands in for the YOLO11n-presence model in the thesis
-architecture, which was never trained (`PRESENCE_MODEL.md` describes how to train one). A check takes
-about 225 ms when Stage 2 sees the bunch and about 505 ms on an empty table. To keep an idle Pi cool,
-each preview frame is first compared with the last frame the detectors ran on (a 160×90 greyscale copy,
-about 2 ms). If less than 0.5% of it changed, an empty table or a held bunch reuses the last answer.
-The detectors still run at least every 2 s, which covers lighting drift and gives a missed bunch a
-second look. A bunch that was seen but not yet captured is always re-checked. On an idle table this
-cuts detector time from about 67% to about 25% of the time. `/api/system/status` reports
-`pipeline.trigger.model_checks` and `skipped_unchanged`. Before this release the
-trigger ran Stage 2 alone at 320 px and fired for 1 of 225. The live preview on System Status draws the trigger's box and status
-(amber: hold still, red: touching the edge, green: scanning, then the grade colour while the result
-is held). The box is drawn on a copy for display only.
+The capture trigger is the team's trained **YOLO11n-presence** detector (`best.pt`, one class
+`banana_bunch`, trained from `yolo11n.pt` with the Stage 2 final settings on bunches of all three
+grades). It runs on the 640×360 preview at 640 px with confidence ≥ 0.80, and a bunch must hold still
+in frame for 400 ms. On the 225 held-out photos it fires for 67/67 Class A, 83/83 Class B and 75/75
+Unhealthy bunches (lowest confidence 0.93), at about 210–245 ms per check. It is the only trigger model,
+so an empty-table check costs one model instead of two. Each preview frame is first compared with the
+last frame the detector ran on (a 160×90 greyscale copy, about 2 ms). If less than 0.5% changed, an
+empty table or a held bunch reuses the last answer, with a forced check every 2 s. A bunch that was
+seen but not yet captured is always re-checked. `/api/system/status` reports
+`pipeline.trigger.model_checks` and `skipped_unchanged`. The preview on System Status draws the
+trigger's box, the model that drew it and the status.
+
+History: the trigger first ran Stage 2 alone at 320 px and fired for 1 of 225. At 640 px Stage 2 missed
+9 of 75 Unhealthy bunches, because its boxes covered only Class A and B. A stock COCO YOLO11n then
+backed it up for a day; it caught all 225 but mistook an open palm for a banana. The app still supports
+that mode (`BANAGRADE_PRESENCE_MODEL` pointing at `yolo11n.pt`, with the hand guard), and falls back to
+Stage 2 alone if no presence model loads.
 
 ## Grading rule
 
@@ -66,7 +64,7 @@ These test-set numbers are also the baselines for the drift indicators.
 
 ## Automated tests (2026-10-25)
 
-- Backend: `python -m pytest backend/tests -q`, **73 passed**.
+- Backend: `python -m pytest backend/tests -q`, **75 passed**.
 - Frontend: `npm test`, **18 passed**, covering grade logic, LED mapping, PDF export, and the empty
   and error states of the dashboard, history and status pages. `npm run build` succeeds.
 
@@ -106,10 +104,15 @@ Every variable, with its default, is listed in `backend/.env.example`. Productio
 
 ## Known limitations
 
-- **The trigger backup is a stock model.** The COCO-pretrained YOLO11n was not trained on Cardava
-  bunches or on this table. It finds every held-out bunch, but false triggers on an empty table, hands
-  or tools have not been measured yet (`ON_SITE_TESTS.md` §3). A false trigger costs one technical
-  failure, not a wrong grade, because Stage 1 and Stage 2 still run on the captured frame.
+- **The presence model fires on scenes that are not the rig.** Pointed at a cluttered desk, it scored
+  0.91 on the empty desk and 0.83 on a hand lying on a laptop, both above the 0.80 trigger. It was
+  trained on photos of the velvet rig, and whether its training set included "no bunch" photos (empty
+  velvet, hands, tools) has not been confirmed. A false trigger costs at most a technical failure: a
+  hand cannot be graded Class A or B because grading needs a Stage 2 box of 0.90 or more. Measure it on
+  the rig (`ON_SITE_TESTS.md` §3). If it fires on the empty velvet or on hands there, retrain it with
+  "no bunch" photos taken on the rig (`PRESENCE_MODEL.md` step 1).
+- **The presence model's train/test split is unconfirmed.** If it used the Stage 1 split, the 225/225
+  result is held-out. If those 225 photos were in its training set, the result is optimistic.
 - **No operator login.** Anyone on the local Wi-Fi can open the dashboard, start a shift and file
   disputes. This is acceptable on a closed farm network. Add authentication before exposing the Pi to
   a wider network.

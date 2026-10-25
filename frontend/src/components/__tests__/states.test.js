@@ -48,7 +48,9 @@ describe('status cards with no data', () => {
     expect(wrapper.find('.alert').text()).toContain('Model file not found')
     expect(wrapper.find('.status-badge').text()).toBe('Missing')
     expect(wrapper.text()).toContain('Raw RGB, whole frame resized to 224 × 224')
-    expect(wrapper.text()).toContain('then the COCO YOLO11n banana class')
+    expect(wrapper.text()).toContain('Stage 2 detector · 400 ms stability check')  // fallback when the API names no trigger
+    const trained = mount(ModelsCard, { props: { models: { ...models, trigger: 'YOLO11n-presence detector' } } })
+    expect(trained.text()).toContain('YOLO11n-presence detector · 400 ms stability check')
   })
 
   it('OperationalSummaryCard renders placeholders without telemetry', () => {

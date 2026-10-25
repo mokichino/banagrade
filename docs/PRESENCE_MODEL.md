@@ -1,16 +1,10 @@
 # Building the YOLO11n-presence model
 
-> **Status (2026-10-25): optional.** The app now backs up the Stage 2 trigger with the stock
-> COCO-pretrained YOLO11n (`models/presence/yolo11n.pt`, `banana` class). With it the trigger fires
-> for all 225 held-out bunches, including all 75 Unhealthy ones, with no training. Follow this guide
-> only if the on-site tests show false triggers or missed bunches, or if the thesis needs a model the
-> team trained itself. "Current trigger" below means Stage 2 alone.
-
-The thesis architecture puts an **Autonomous Trigger (YOLO11n-presence)** before Stage 1. Its only job
-is to decide "a bunch is on the table and still, take the photo". It never grades. Until now the app
-has used the Stage 2 detector for this job. Stage 2 was trained only on Class A and B bunches, so it
-misses 9 of the 75 held-out Unhealthy bunches. A missed bunch is never photographed, the LED stays
-green, and Stage 1 never sees it.
+> **Status (2026-10-26): trained and in use.** `models/presence/best.pt` is the trigger. It fires for all
+> 225 held-out bunches, but on a cluttered desk it fired at 0.91 with no bunch and 0.83 on a hand. If it
+> also fires on the empty velvet or on hands at the rig, redo step 1 (hands, empty velvet and objects
+> photographed on the rig) and retrain. The tables below compare against Stage 2 alone, the trigger
+> before this model.
 
 This guide builds the missing model. Stage 1, Stage 2 and all their results stay unchanged.
 

@@ -29,7 +29,7 @@ def test_status_reports_disabled_pipeline_without_fabrication(client) -> None:
     assert body["pipeline"]["camera"]["resolution"] is None
     assert body["pipeline"]["led"]["state"] == "error"
     assert body["pipeline"]["preprocessing"].startswith("Raw RGB")  # Stage 1 mask is off by default
-    assert [m["label"] for m in body["models"]["models"]] == ["stage1_best.pt", "stage2_best.pt", "yolo11n.pt"]
+    assert [m["label"] for m in body["models"]["models"]] == ["stage1_best.pt", "stage2_best.pt", "best.pt"]
     assert test_client.get("/api/camera/preview.mjpg").status_code == 503
 
 

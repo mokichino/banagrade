@@ -65,7 +65,7 @@ def classify_with(net: Any, transform: Any, names: dict[int, str], bgr: Any) -> 
 class PresenceHit(NamedTuple):
     box: tuple[float, float, float, float]
     confidence: float
-    source: str  # "Stage 2" or "backup", shown on the preview box
+    source: str  # "presence", "Stage 2" or "backup", shown on the preview box
 
 
 # A COCO "person" box at least this confident hides the "banana" boxes it covers. An open palm with the
@@ -82,13 +82,13 @@ def _covered(inner: list[float], outer: list[float]) -> float:
     return width * height / max(1e-6, (inner[2] - inner[0]) * (inner[3] - inner[1]))
 
 
-def _best_box(model: Any, image: Any, confidence: float) -> PresenceHit | None:
+def _best_box(model: Any, image: Any, confidence: float, source: str = "Stage 2") -> PresenceHit | None:
     result = model.predict(source=image, conf=confidence, imgsz=640, verbose=False)[0]
     if result.boxes is None or len(result.boxes.xyxy) == 0:
         return None
     best = int(result.boxes.conf.argmax())
     box = tuple(float(value) for value in result.boxes.xyxy[best].tolist())
-    return PresenceHit(box, float(result.boxes.conf[best]), "Stage 2")  # type: ignore[arg-type]
+    return PresenceHit(box, float(result.boxes.conf[best]), source)  # type: ignore[arg-type]
 
 
 def _backup_banana(model: Any, image: Any, confidence: float, banana: list[int], person: list[int]) -> PresenceHit | None:
@@ -106,6 +106,18 @@ def _backup_banana(model: Any, image: Any, confidence: float, banana: list[int],
         return None
     conf, xyxy = max(bananas)
     return PresenceHit(tuple(float(value) for value in xyxy), float(conf), "backup")  # type: ignore[arg-type]
+
+
+PRESENCE_ROLE = {
+    "trained": {"architecture": "YOLO11n-presence (trained, banana_bunch)", "task": "Capture trigger: any bunch, Class A, B or Rejected"},
+    "coco": {"architecture": "YOLO11n-det, COCO-pretrained", "task": "Capture trigger backup (COCO banana class)"},
+    None: {"architecture": "YOLO11n-det", "task": "Capture trigger (not loaded)"},
+}
+TRIGGER_DESCRIPTION = {
+    "trained": "YOLO11n-presence detector",
+    "coco": "Stage 2 detector, then the COCO YOLO11n banana class if it finds nothing",
+    None: "Stage 2 detector",
+}
 
 
 class UltralyticsInference:
@@ -129,6 +141,9 @@ class UltralyticsInference:
         self._presence: Any = None
         self._presence_classes: list[int] = []
         self._person_classes: list[int] = []
+        # "trained": the team's YOLO11n-presence (banana_bunch) is the whole trigger.
+        # "coco": a stock COCO YOLO11n backs up Stage 2 through its banana class.
+        self._presence_mode: str | None = None
         self._error: str | None = None
         self._model_errors: dict[str, str] = {}
 
@@ -139,7 +154,7 @@ class UltralyticsInference:
             os.getenv("BANAGRADE_STAGE1_MODEL", str(project_models / "stage 1" / "stage1_best.pt")),
             os.getenv("BANAGRADE_STAGE2_MODEL", str(project_models / "stage 2" / "stage2_best.pt")),
             os.getenv("BANAGRADE_LENGTH_AXIS", "width"),
-            os.getenv("BANAGRADE_PRESENCE_MODEL", str(project_models / "presence" / "yolo11n.pt")) or None,
+            os.getenv("BANAGRADE_PRESENCE_MODEL", str(project_models / "presence" / "best.pt")) or None,
             float(os.getenv("BANAGRADE_PRESENCE_CONF", "0.50")),
         )
 
@@ -175,11 +190,14 @@ class UltralyticsInference:
         self._error = None
 
     def _load_presence(self, yolo: Any) -> None:
-        """The COCO-pretrained YOLO11n backs up the Stage 2 detector as the capture trigger.
+        """Load the capture-trigger model. Its classes decide how it is used.
+
+        - ``banana_bunch``: the team's trained YOLO11n-presence, trained on all three grades. It is the trigger.
+        - ``banana``: a stock COCO-pretrained YOLO11n, used only when Stage 2 sees nothing.
 
         Optional: if it is missing or invalid, the trigger falls back to Stage 2 alone and grading continues.
         """
-        self._presence, self._presence_classes, self._person_classes = None, [], []
+        self._presence, self._presence_classes, self._person_classes, self._presence_mode = None, [], [], None
         if self.presence_path is None:
             return
         if not self.presence_path.is_file():
@@ -190,12 +208,16 @@ class UltralyticsInference:
         except Exception as error:  # a corrupt optional model must not stop grading
             self._model_errors["presence"] = f"Presence model failed to load: {error}"
             return
-        banana = [index for index, name in presence.names.items() if str(name).strip().lower() == "banana"]
-        if presence.task != "detect" or not banana:
-            self._model_errors["presence"] = "Expected a detector with a banana class (COCO-pretrained YOLO11n)"
+        names = {index: str(name).strip().lower() for index, name in presence.names.items()}
+        if presence.task == "detect" and set(names.values()) == {"banana_bunch"}:
+            self._presence, self._presence_classes, self._presence_mode = presence, list(names), "trained"
             return
-        person = [index for index, name in presence.names.items() if str(name).strip().lower() == "person"]
-        self._presence, self._presence_classes, self._person_classes = presence, banana, person
+        banana = [index for index, name in names.items() if name == "banana"]
+        if presence.task != "detect" or not banana:
+            self._model_errors["presence"] = "Expected a banana_bunch detector (YOLO11n-presence) or a COCO YOLO11n with a banana class"
+            return
+        person = [index for index, name in names.items() if name == "person"]
+        self._presence, self._presence_classes, self._person_classes, self._presence_mode = presence, banana, person, "coco"
 
     @property
     def available(self) -> bool:
@@ -221,6 +243,7 @@ class UltralyticsInference:
             "stage1_model": str(self.stage1_path),
             "stage2_model": str(self.stage2_path),
             "presence_model": str(self.presence_path) if self.presence_path else None,
+            "trigger": TRIGGER_DESCRIPTION[self._presence_mode],
             "length_axis": self.length_axis,
             "empirical_threshold_px": float(os.getenv("BANAGRADE_WIDTH_THRESHOLD_PX", "2730.07")),
             "error": self._error,
@@ -228,7 +251,7 @@ class UltralyticsInference:
                 {"key": "stage1", "label": self.stage1_path.name, "architecture": "YOLO11n-cls", "task": "Health screening (Healthy / Unhealthy)", "path": str(self.stage1_path), "state": self._model_state("stage1", self.stage1_path, self._stage1 is not None)},
                 {"key": "stage2", "label": self.stage2_path.name, "architecture": "YOLO11n-det", "task": "Whole-bunch detection (banana_bunch)", "path": str(self.stage2_path), "state": self._model_state("stage2", self.stage2_path, self._stage2 is not None)},
                 *(
-                    [{"key": "presence", "label": self.presence_path.name, "architecture": "YOLO11n-det, COCO-pretrained", "task": "Capture trigger backup (COCO banana class)", "path": str(self.presence_path), "state": self._model_state("presence", self.presence_path, self._presence is not None)}]
+                    [{"key": "presence", "label": self.presence_path.name, **PRESENCE_ROLE.get(self._presence_mode, PRESENCE_ROLE[None]), "path": str(self.presence_path), "state": self._model_state("presence", self.presence_path, self._presence is not None)}]
                     if self.presence_path
                     else []
                 ),
@@ -249,11 +272,16 @@ class UltralyticsInference:
     ) -> PresenceHit | None:
         """Capture trigger on the low-resolution preview frame: the best box, its confidence and its model, or None.
 
-        The Stage 2 detector runs first. It was trained only on Class A and B bunches and misses 9 of the
+        With the trained YOLO11n-presence it is the only trigger: on the 225 held-out photos it fires for all
+        67 Class A, 83 Class B and 75 Unhealthy bunches (lowest confidence 0.93), at about 240 ms per check.
+
+        Otherwise the Stage 2 detector runs first. It was trained only on Class A and B bunches and misses 9 of the
         75 held-out Unhealthy ones, so when it finds nothing the COCO-pretrained YOLO11n looks for its
         banana class, ignoring any banana a hand ("person") covers. Together they find all 225 held-out
         bunches. Both run at 640 px: at 320 px Stage 2 found 1 of 225.
         """
+        if self._presence_mode == "trained":
+            return _best_box(self._presence, image, confidence_threshold, "presence")
         if self._stage2 is None:
             return None
         found = _best_box(self._stage2, image, confidence_threshold)

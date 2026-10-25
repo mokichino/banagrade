@@ -106,9 +106,8 @@ Status shows whether the trigger saw it (a box appears) or not (no box).
 
 How to read it (held-out test set for comparison):
 
-- **No capture:** expect 0 of 30. With the COCO backup, the trigger fired for all 225 held-out bunches,
-  including all 75 Unhealthy. Stage 2 alone missed 9 of the 75 Unhealthy ones, so note any Unhealthy
-  bunch that is not captured.
+- **No capture:** expect 0 of 30. The YOLO11n-presence trigger fired for all 225 held-out bunches,
+  including all 75 Unhealthy, so note any bunch that is not captured.
 - **Unhealthy → Rejected:** expect 10 / 10 of the bunches that were captured. The test set had Unhealthy recall 0.987. A miss means a
   diseased bunch would be exported, so record which bunch it was.
 - **Healthy never Rejected:** expect 0 of 20 rejected. The test set had none.

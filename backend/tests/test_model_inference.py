@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from app.model_inference import classify_with, pixel_length_from_bbox, stage1_transform
@@ -146,3 +148,37 @@ def test_invalid_or_missing_presence_model_is_reported_without_stopping_grading(
 
     inference._load_presence(lambda path: StubDetector([], names={0: "person", 46: "banana"}))
     assert (inference._presence_classes, inference._person_classes) == ([46], [0])
+
+
+
+def test_trained_presence_model_is_the_whole_trigger() -> None:
+    pytest.importorskip("torch")
+    from app.model_inference import UltralyticsInference
+
+    stage2 = StubDetector([((10, 20, 300, 200), 0.95)])
+    presence = StubDetector([((12, 22, 298, 205), 0.93)], names={0: "banana_bunch"})
+    inference = UltralyticsInference("s1.pt", "s2.pt", presence_path="best.pt")
+    inference._stage2 = stage2
+    inference._load_presence(lambda path: presence)  # file check is skipped below
+    assert inference._presence_mode is None  # best.pt does not exist in the test directory
+
+    inference.presence_path = Path(__file__)  # any existing file
+    inference._load_presence(lambda path: presence)
+    assert inference._presence_mode == "trained"
+    hit = inference.detect_presence(None, 0.80)
+    assert hit.source == "presence" and hit.confidence == pytest.approx(0.93)
+    assert presence.calls == [{"conf": 0.80, "imgsz": 640, "classes": None}]
+    assert stage2.calls == []  # one model per check
+    status = inference.status()
+    assert status["trigger"] == "YOLO11n-presence detector"
+    assert next(m for m in status["models"] if m["key"] == "presence")["architecture"].startswith("YOLO11n-presence")
+
+
+def test_trained_presence_model_below_the_trigger_gate_does_not_fire() -> None:
+    pytest.importorskip("torch")
+    from app.model_inference import UltralyticsInference
+
+    inference = UltralyticsInference("s1.pt", "s2.pt", presence_path=Path(__file__))
+    inference._stage2 = StubDetector([((10, 20, 300, 200), 0.95)])
+    inference._load_presence(lambda path: StubDetector([((12, 22, 298, 205), 0.74)], names={0: "banana_bunch"}))
+    assert inference.detect_presence(None, 0.80) is None  # Stage 2 is not consulted in trained mode

@@ -1,6 +1,9 @@
+import csv
+import io
+import zipfile
 from pathlib import Path
 
-from app.storage import Storage, now_iso
+from app.storage import Storage, disputes_zip, now_iso
 
 
 def _scan(scan_id: str, session_id: str | None, grade: str | None, captured_at: str | None = None, **extra) -> dict:
@@ -73,3 +76,37 @@ def test_migration_adds_stage2_confidence(tmp_path: Path) -> None:
     with storage.connect() as connection:
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(scans)")}
     assert "stage2_confidence" in columns
+
+
+def test_dispute_keeps_model_grade_across_repeated_corrections(tmp_path: Path) -> None:
+    storage = Storage(tmp_path / "banagrade.db")
+    storage.initialize()
+    storage.save_scan(_scan("a", None, "Class A"))
+    first = storage.dispute_scan("a", "Looks small", "Class B", tmp_path / "retrain")
+    second = storage.dispute_scan("a", "Actually bruised", "Rejected", tmp_path / "retrain")
+    assert first["original_grade"] == second["original_grade"] == "Class A"
+    assert storage.get_scan("a")["final_grade"] == "Rejected"
+    [row] = storage.disputed_scans()
+    assert (row["model_grade"], row["corrected_grade"], row["reason"]) == ("Class A", "Rejected", "Actually bruised")
+
+
+def test_disputes_zip_sorts_frames_by_corrected_grade(tmp_path: Path) -> None:
+    storage = Storage(tmp_path / "banagrade.db")
+    storage.initialize()
+    frame = tmp_path / "frames" / "a.jpg"
+    frame.parent.mkdir()
+    frame.write_bytes(b"\xff\xd8jpeg")
+    storage.save_scan(_scan("a", None, "Class A", image_refs=[str(frame)]))
+    storage.save_scan(_scan("t", None, None, rejection_reason="LOW_CONFIDENCE"))
+    storage.dispute_scan("a", None, "Class B", tmp_path / "retrain")
+    storage.dispute_scan("t", "No grade given", None, tmp_path / "retrain")
+
+    target = disputes_zip(storage.disputed_scans(), tmp_path / "out.zip")
+    with zipfile.ZipFile(target) as archive:
+        assert sorted(archive.namelist()) == ["frames/Class_B/a_a.jpg", "labels.csv"]
+        assert archive.read("frames/Class_B/a_a.jpg") == b"\xff\xd8jpeg"
+        labels = list(csv.DictReader(io.StringIO(archive.read("labels.csv").decode())))
+    assert [(r["scan_id"], r["model_grade"], r["corrected_grade"], r["frame"]) for r in labels] == [
+        ("a", "Class A", "Class B", "frames/Class_B/a_a.jpg"),
+        ("t", "Technical Failure", "", ""),
+    ]

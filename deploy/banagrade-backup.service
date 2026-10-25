@@ -1,0 +1,12 @@
+[Unit]
+Description=Banagrade database backup
+
+[Service]
+Type=oneshot
+User=banagrade
+Group=banagrade
+WorkingDirectory=/opt/banagrade/backend
+EnvironmentFile=-/etc/banagrade/banagrade.env
+ExecStart=/opt/banagrade/.venv/bin/python scripts/backup_db.py
+NoNewPrivileges=true
+PrivateTmp=true

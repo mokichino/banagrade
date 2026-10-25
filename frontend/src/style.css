@@ -220,6 +220,10 @@ nav { display: grid; gap: 3px; }
 .telemetry-grid span { color: var(--text-muted); font-size: 12px; }
 .telemetry-grid strong { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .telemetry-grid small { color: var(--text-muted); font-size: 11px; line-height: 1.4; }
+.drift-card { grid-column: 1 / -1; }
+.drift-card .telemetry-grid { margin-top: 0; }
+.drift-grid { grid-template-columns: repeat(3, 1fr); }
+.drift-summary { margin: 6px 0 0; font-size: 13px; line-height: 1.45; }
 .diagnostic-list { margin: 14px 0 0; padding: 0; list-style: none; }
 .diagnostic-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 0; border-bottom: 1px solid var(--surface-hover); }
 .diagnostic-row:last-child { border-bottom: 0; }

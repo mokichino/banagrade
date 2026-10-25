@@ -4,8 +4,8 @@
 export const WIDTH_THRESHOLD_PX = 2730.07
 
 export const GRADES = {
-  'Class A': { key: 'a', label: 'Class A', description: 'Large hand (≥ 12 cm)' },
-  'Class B': { key: 'b', label: 'Class B', description: 'Small hand (8–12 cm)' },
+  'Class A': { key: 'a', label: 'Class A', description: 'Large hand (width ≥ 2730.07 px)' },
+  'Class B': { key: 'b', label: 'Class B', description: 'Small hand (width < 2730.07 px)' },
   Rejected: { key: 'r', label: 'Rejected', description: 'Unhealthy at Stage 1' }
 }
 

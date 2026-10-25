@@ -131,8 +131,8 @@ defineExpose({ load })
         <p class="volume-foot"><span>{{ summary.total_completed_scans ?? 0 }} graded</span><span v-if="summary.technical_failure_count">· {{ summary.technical_failure_count }} technical failure{{ summary.technical_failure_count === 1 ? '' : 's' }} (excluded from rates)</span></p>
       </article>
       <div class="kpi-grid three">
-        <article class="kpi-card grade-a"><span>CLASS A</span><strong>{{ summary.class_a_count ?? 0 }}</strong><small>Large hand · ≥ 12 cm</small></article>
-        <article class="kpi-card grade-b"><span>CLASS B</span><strong>{{ summary.class_b_count ?? 0 }}</strong><small>Small hand · 8–12 cm</small></article>
+        <article class="kpi-card grade-a"><span>CLASS A</span><strong>{{ summary.class_a_count ?? 0 }}</strong><small>Large hand · width ≥ 2730.07 px</small></article>
+        <article class="kpi-card grade-b"><span>CLASS B</span><strong>{{ summary.class_b_count ?? 0 }}</strong><small>Small hand · width < 2730.07 px</small></article>
         <article class="kpi-card reject"><span>REJECTED</span><strong>{{ summary.rejected_count ?? 0 }}</strong><small>{{ summary.rejection_rate ?? 0 }}% · unhealthy at Stage 1</small></article>
       </div>
     </div>
@@ -147,8 +147,8 @@ defineExpose({ load })
             <div class="doughnut-center"><strong>{{ accepted }}</strong><span>accepted</span></div>
           </div>
           <ul class="yield-legend">
-            <li><span class="swatch a"></span><div><b>Class A</b><small>Large hand ≥ 12 cm</small></div><strong>{{ summary.class_a_count }}<em>{{ sharePct(summary.class_a_count) }}%</em></strong></li>
-            <li><span class="swatch b"></span><div><b>Class B</b><small>Small hand 8–12 cm</small></div><strong>{{ summary.class_b_count }}<em>{{ sharePct(summary.class_b_count) }}%</em></strong></li>
+            <li><span class="swatch a"></span><div><b>Class A</b><small>Large hand · width ≥ 2730.07 px</small></div><strong>{{ summary.class_a_count }}<em>{{ sharePct(summary.class_a_count) }}%</em></strong></li>
+            <li><span class="swatch b"></span><div><b>Class B</b><small>Small hand · width < 2730.07 px</small></div><strong>{{ summary.class_b_count }}<em>{{ sharePct(summary.class_b_count) }}%</em></strong></li>
           </ul>
         </div>
       </div>

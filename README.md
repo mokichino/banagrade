@@ -7,8 +7,9 @@ Banagrade is a local-first Cardava banana screening and size grading application
 The system implements the thesis *A Two-Stage Deep Learning System for Cardava Banana Disease Detection and Quality Classification with Operational Analytics Dashboard*. `docs/QUALITY_CHECKLIST.md` maps every feature to its thesis section.
 
 - `backend/app/grading.py` is the authoritative grading contract. Stage 1 Unhealthy means Rejected. Healthy bunches are graded by horizontal bounding-box width in the 4608×2592 frame: **≥ 2730.07 px is Class A, otherwise Class B** (thesis §4.4.3). The threshold is an image-space boundary, not a centimetre measurement.
-- `backend/app/preprocessing.py` builds the RGB-to-HSV mask that Stage 1 receives (§3.3.7). Stage 2 receives the raw frame.
-- `backend/app/pipeline.py` is the presence-triggered FSM. It captures at 4608×2592 on Camera Module 3, locks autofocus after one cycle at boot, and triggers on a stable in-frame detection held for 400 ms. Each result is persisted to SQLite and pushed over `/ws/live`.
+- Both models receive the raw frame, as they were trained. Stage 1 squashes the whole frame to 224×224. `backend/app/preprocessing.py` keeps the RGB-to-HSV mask from §3.3.7, but it is off by default (`BANAGRADE_STAGE1_MASK=1`), because in training the mask was only used to generate the Stage 2 bounding-box labels.
+- `backend/app/pipeline.py` is the presence-triggered FSM. The capture trigger runs on the low-resolution preview: the Stage 2 `banana_bunch` detector first, then the stock COCO-pretrained YOLO11n (`models/presence/yolo11n.pt`, banana class) when Stage 2 finds nothing, because Stage 2 was never trained on diseased bunches. The preview on System Status draws the trigger's box and status. It captures at 4608×2592 on Camera Module 3, locks autofocus after one cycle at boot, and triggers on a stable in-frame detection held for 400 ms. Each result is persisted to SQLite and pushed over `/ws/live`, and the frame is archived for disputes (`backend/app/frames.py`).
+- `backend/app/drift.py` compares the latest 200 scans with the held-out test set (Stage 1 and Stage 2 confidence, low-confidence and missed-detection rates, dispute rates) and flags drift on the System Status page.
 - `backend/app/leds.py` drives the floor LEDs: green ready, yellow Class A, blue Class B, red Rejected, slow red blink while booting, fast red blink on error. The dashboard mirrors the same state.
 - `backend/app/telemetry.py` reads uptime, CPU temperature, fan state, latency and database health from the device. Unavailable readings are `null`, never estimated.
 - `backend/app/storage.py` owns SQLite, shift sessions, analytics, the rejection trend, and disputes.
@@ -127,7 +128,7 @@ Install once (from the repository root):
 ```bash
 sudo useradd --system --home /opt/banagrade --shell /usr/sbin/nologin banagrade
 (cd frontend && npm run build)
-sudo rsync -a --exclude .git --exclude .venv --exclude frontend/node_modules --exclude models/dataset --exclude models/check --exclude 'backend/*.db*' ./ /opt/banagrade/
+sudo rsync -a --exclude .git --exclude .venv --exclude frontend/node_modules --exclude models/dataset --exclude models/check --exclude training --exclude 'backend/*.db*' ./ /opt/banagrade/
 cd /opt/banagrade && sudo python3 -m venv .venv
 sudo .venv/bin/pip install --resume-retries 10 --index-url https://download.pytorch.org/whl/cpu "torch==2.14.1+cpu" "torchvision==0.29.1+cpu"
 sudo .venv/bin/pip install --resume-retries 10 -r backend/requirements-runtime.txt
@@ -135,9 +136,18 @@ sudo mkdir -p /etc/banagrade /var/lib/banagrade/retrain
 sudo cp backend/.env.example /etc/banagrade/banagrade.env
 sudo nano /etc/banagrade/banagrade.env
 sudo chown -R banagrade:banagrade /opt/banagrade /var/lib/banagrade
-sudo cp deploy/banagrade.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now banagrade
+sudo cp deploy/banagrade.service deploy/banagrade-backup.service deploy/banagrade-backup.timer /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now banagrade banagrade-backup.timer
 ```
+
+The backup timer copies `banagrade.db` to `/var/lib/banagrade/backups` every night at 23:30 using
+SQLite's online backup, checks the copy's integrity and row counts, and keeps the newest 14. Run one
+by hand with `sudo systemctl start banagrade-backup` and check it with `journalctl -u banagrade-backup`.
+
+Every captured frame is saved to `/var/lib/banagrade/frames` (about 0.9 MB each, newest 1,000 kept,
+`BANAGRADE_FRAME_KEEP`). Disputing a scan copies its frame into `/var/lib/banagrade/retrain`, and
+**System Status → Export disputed frames** downloads those frames with a `labels.csv` for review
+before retraining. The `training/` folder holds the training scripts and is not deployed.
 
 PyTorch is installed from the CPU-only index first. The ARM64 wheel on PyPI is a CUDA build that
 pulls about 3 GB of NVIDIA libraries the Pi cannot use; with torch already present, Ultralytics
@@ -152,7 +162,7 @@ for the camera and LEDs. Check it with `systemctl status banagrade` and
 `journalctl -u banagrade -f`. Scan timestamps rely on the Pi 5 real-time clock when there is no
 internet for NTP, so fit the RTC battery if the device will boot offline.
 
-Configuration variables are documented in `backend/.env.example`. For a quick single-port check
+Configuration variables are documented in `backend/.env.example`. When updating an existing install, make sure `/etc/banagrade/banagrade.env` sets `BANAGRADE_PRESENCE_MODEL=/opt/banagrade/models/presence/yolo11n.pt`: older copies of the example had an empty value, which disables the trigger backup. For a quick single-port check
 during development, run `npm run build` in `frontend/` and open port 8000 instead of 5173.
 
 ## Presentation mode (mock data)
@@ -188,7 +198,7 @@ export PYTHONPATH="$PWD/backend"
 python -m pytest backend/tests -q
 
 cd frontend
-npm test          # Vitest: grade labels, LED mapping, PDF export
+npm test          # Vitest: grade labels, LED mapping, PDF export, empty and error states
 npm run build
 ```
 

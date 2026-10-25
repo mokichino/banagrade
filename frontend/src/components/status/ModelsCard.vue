@@ -34,7 +34,7 @@ const INPUT = { stage1: 'Raw RGB, whole frame resized to 224 × 224', stage2: 'R
       <dt>Empirical threshold</dt><dd><b>{{ models?.empirical_threshold_px ?? 2730.07 }} px</b></dd>
       <dt>Measurement</dt><dd>Horizontal bbox {{ models?.length_axis || 'width' }} in the 4608 × 2592 frame</dd>
       <dt>Decision</dt><dd>≥ threshold → Class A · below → Class B · Unhealthy → Rejected</dd>
-      <dt>Capture trigger</dt><dd>Stage 2 detector, then the COCO YOLO11n banana class if it finds nothing · 400 ms stability check</dd>
+      <dt>Capture trigger</dt><dd>{{ models?.trigger || 'Stage 2 detector' }} · 400 ms stability check</dd>
     </dl>
   </div>
 </template>

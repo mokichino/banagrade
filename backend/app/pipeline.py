@@ -417,7 +417,12 @@ class PresencePipeline:
                     self.leds.set(LedState.READY)
                 await asyncio.sleep(self.presence_interval_s)
                 continue
-            self._show(box, f"Bunch {confidence:.2f} ({source}) · hold still", OVERLAY_CHECKING)
+            # Checked at first sight too: a moving hand never passes the stability check, so it would
+            # otherwise be shown as a bunch until it held still.
+            if not await self._objects_clear(frame, box):
+                await asyncio.sleep(self.presence_interval_s)
+                continue
+            self._show(box, f"Checking {confidence:.2f} ({source}) · hold still", OVERLAY_CHECKING)
             await self._set_state(PipelineState.PRESENCE_DETECTED)
             await self._emit("presence_detected")
             if await self._stable_and_in_frame(frame, box):
@@ -447,6 +452,22 @@ class PresencePipeline:
     def _show(self, box: tuple[float, float, float, float], label: str, color: tuple[int, int, int]) -> None:
         self._overlay = PreviewOverlay(box, label, color, time.monotonic())
 
+    async def _objects_clear(self, frame: Any, box: tuple[float, float, float, float]) -> bool:
+        """False, with the reason on the box, when a hand is in view or the box is on another COCO object.
+
+        Stage 1 judges the whole frame, so a hand in view can sway it; other COCO objects are not bunches.
+        """
+        objects = await asyncio.to_thread(self.inference.check_objects, frame, box)
+        if objects.hand >= HAND_CONFIDENCE:
+            self._show(box, f"Hand in view ({objects.hand:.2f}) · let go to scan", OVERLAY_CHECKING)
+            return False
+        if objects.other:
+            name, score = objects.other
+            self._ignored_label = f"Not a bunch · looks like a {name} ({score:.2f})"
+            self._show(box, self._ignored_label, OVERLAY_FAILURE)
+            return False
+        return True
+
     async def _stable_and_in_frame(self, first_frame: Any, first: tuple[float, float, float, float]) -> bool:
         await asyncio.sleep(self.STABILITY_WINDOW_S)
         second = await self._capture_lores()
@@ -458,20 +479,12 @@ class PresencePipeline:
         height, width = second.shape[:2]
         margin = 2
         if min(current[0], current[1]) <= margin or current[2] >= width - margin or current[3] >= height - margin:
-            self._show(current, f"Bunch {confidence:.2f} ({source}) · touching the edge, move it in", OVERLAY_PROBLEM)
+            self._show(current, f"Checking {confidence:.2f} ({source}) · touching the edge, move it in", OVERLAY_PROBLEM)
             return False
         if max(abs(a - b) for a, b in zip(first, current)) > max(width, height) * 0.03:
-            self._show(current, f"Bunch {confidence:.2f} ({source}) · moving, hold still", OVERLAY_CHECKING)
+            self._show(current, f"Checking {confidence:.2f} ({source}) · moving, hold still", OVERLAY_CHECKING)
             return False
-        # Stage 1 judges the whole frame, so a hand in view can sway it; other COCO objects are not bunches.
-        objects = await asyncio.to_thread(self.inference.check_objects, second, current)
-        if objects.hand >= HAND_CONFIDENCE:
-            self._show(current, f"Hand in view ({objects.hand:.2f}) · let go to scan", OVERLAY_CHECKING)
-            return False
-        if objects.other:
-            name, score = objects.other
-            self._ignored_label = f"Not a bunch · looks like a {name} ({score:.2f})"
-            self._show(current, self._ignored_label, OVERLAY_FAILURE)
+        if not await self._objects_clear(second, current):  # a hand may have come in during the window
             return False
         self._show(current, f"Bunch {confidence:.2f} ({source}) · scanning", OVERLAY_READY)
         return True

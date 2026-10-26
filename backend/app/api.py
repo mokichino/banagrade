@@ -297,6 +297,21 @@ async def dispute_scan(scan_id: str, payload: DisputeRequest) -> dict[str, Any]:
     await events.publish("scan_disputed", result)
     return {**result, "status": "open"}
 
+@app.get("/api/inspection/scans/{scan_id}/disputes")
+def list_scan_disputes(scan_id: str) -> dict[str, Any]:
+    return {"items": storage.scan_disputes(scan_id)}
+
+
+@app.delete("/api/inspection/scans/{scan_id}/disputes/{dispute_id}")
+async def delete_dispute(scan_id: str, dispute_id: str) -> dict[str, Any]:
+    try:
+        result = storage.delete_dispute(scan_id, dispute_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Dispute not found") from error
+    await events.publish("dispute_deleted", result)
+    return result
+
+
 
 @app.get("/api/sessions")
 def sessions() -> dict[str, Any]:

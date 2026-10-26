@@ -60,7 +60,7 @@ function onDisputeSaved() {
       <SystemStatusView v-else-if="activeView === 'status'" :led="led" @error="error = $event" />
     </main>
     <ScanDrawer :scan="selectedScan" @close="selectedScan = null" />
-    <DisputeModal :scan="disputeScan" @close="disputeScan = null" @saved="onDisputeSaved" @error="error = $event" />
+    <DisputeModal :scan="disputeScan" @close="disputeScan = null" @saved="onDisputeSaved" @changed="refreshKey += 1" @error="error = $event" />
     <PowerDialog :open="powerOpen" @close="powerOpen = false" />
   </div>
 </template>

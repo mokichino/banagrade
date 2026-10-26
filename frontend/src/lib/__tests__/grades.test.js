@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { confidencePercent, finalGradeKey, finalGradeLabel, formatConfidence, matchesGrade, matchesSearch, scanLabel, stage2Label } from '../grades.js'
+import { confidencePercent, disputeSummary, finalGradeKey, finalGradeLabel, formatConfidence, matchesGrade, matchesSearch, scanLabel, stage2Label } from '../grades.js'
 import { LED_LEGEND, ledInfo } from '../led.js'
 
 const healthyA = { scan_id: 'abcdef12-3456', stage1_status: 'Healthy', final_grade: 'Class A', captured_at: '2026-10-13T08:00:00+00:00' }
@@ -29,6 +29,15 @@ describe('grade presentation', () => {
     expect(matchesGrade(healthyA, 'Class A')).toBe(true)
     expect(matchesGrade(failure, 'Rejected')).toBe(false)
     expect(matchesGrade(failure, 'All')).toBe(true)
+    expect(matchesGrade(failure, 'Technical failure')).toBe(true)
+    expect(matchesGrade(rejected, 'Technical failure')).toBe(false)
+    expect(matchesGrade({ ...healthyA, disputed: 1 }, 'Disputed')).toBe(true)
+    expect(matchesGrade(healthyA, 'Disputed')).toBe(false)
+  })
+  it('summarises a dispute for the table badge', () => {
+    expect(disputeSummary(healthyA)).toBe('')
+    expect(disputeSummary({ ...healthyA, disputed: 1, model_grade: 'Class B', dispute_reason: 'Middle finger 12.0 cm' })).toBe('Model graded Class B · Middle finger 12.0 cm')
+    expect(disputeSummary({ ...rejected, disputed: 1, model_grade: 'Technical Failure', dispute_reason: null })).toBe('Model graded Technical failure')
     expect(matchesSearch(healthyA, '#scn-abc')).toBe(true)
     expect(matchesSearch(healthyA, '2026-10-13')).toBe(true)
     expect(matchesSearch(rejected, 'abcdef')).toBe(false)

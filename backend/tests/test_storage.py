@@ -3,6 +3,8 @@ import io
 import zipfile
 from pathlib import Path
 
+import pytest
+
 from app.storage import Storage, disputes_zip, now_iso
 
 
@@ -82,12 +84,35 @@ def test_dispute_keeps_model_grade_across_repeated_corrections(tmp_path: Path) -
     storage = Storage(tmp_path / "banagrade.db")
     storage.initialize()
     storage.save_scan(_scan("a", None, "Class A"))
+    storage.save_scan(_scan("b", None, "Class B"))
     first = storage.dispute_scan("a", "Looks small", "Class B", tmp_path / "retrain")
     second = storage.dispute_scan("a", "Actually bruised", "Rejected", tmp_path / "retrain")
     assert first["original_grade"] == second["original_grade"] == "Class A"
     assert storage.get_scan("a")["final_grade"] == "Rejected"
     [row] = storage.disputed_scans()
     assert (row["model_grade"], row["corrected_grade"], row["reason"]) == ("Class A", "Rejected", "Actually bruised")
+    assert {scan["scan_id"]: scan["disputed"] for scan in storage.list_scans()} == {"a": 1, "b": 0}
+
+
+def test_deleting_disputes_restores_the_previous_grade(tmp_path: Path) -> None:
+    storage = Storage(tmp_path / "banagrade.db")
+    storage.initialize()
+    frame = tmp_path / "frames" / "a.jpg"
+    frame.parent.mkdir()
+    frame.write_bytes(b"\xff\xd8jpeg")
+    storage.save_scan(_scan("a", None, "Class B", image_refs=[str(frame)]))
+    first = storage.dispute_scan("a", "Middle finger 12.5 cm", "Class A", tmp_path / "retrain")
+    second = storage.dispute_scan("a", "Rotting", "Rejected", tmp_path / "retrain")
+    assert [row["id"] for row in storage.scan_disputes("a")] == [second["id"], first["id"]]
+
+    assert storage.delete_dispute("a", second["id"])["final_grade"] == "Class A"
+    assert Path(first["archived_frames"][0]).exists()
+    result = storage.delete_dispute("a", first["id"])
+    assert (result["final_grade"], result["remaining_disputes"]) == ("Class B", 0)
+    assert not Path(first["archived_frames"][0]).exists()
+    assert storage.list_scans()[0]["disputed"] == 0
+    with pytest.raises(KeyError):
+        storage.delete_dispute("a", first["id"])
 
 
 def test_disputes_zip_sorts_frames_by_corrected_grade(tmp_path: Path) -> None:

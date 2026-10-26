@@ -1,7 +1,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { wsUrl } from './useApi.js'
 
-const DATA_EVENTS = new Set(['scan_completed', 'scan_disputed', 'session_updated'])
+const DATA_EVENTS = new Set(['scan_completed', 'scan_disputed', 'dispute_deleted', 'session_updated'])
 
 /** WebSocket link to /ws/live with reconnect. Tracks LED + FSM state and signals data refreshes. */
 export function useLive(onDataChanged) {

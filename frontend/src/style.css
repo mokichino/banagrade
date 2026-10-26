@@ -62,10 +62,10 @@ nav { display: grid; gap: 3px; }
 .nav-button:hover { background: var(--surface-hover); color: var(--text); }
 .nav-button.active { background: var(--surface-hover); color: var(--text); font-weight: 600; }
 .nav-button.active::before { position: absolute; left: 0; width: 3px; height: 20px; border-radius: 0 3px 3px 0; background: var(--class-a); content: ""; }
-.power-shortcut { gap: 10px; margin-top: auto; margin-bottom: 8px; }
+.power-shortcut { flex: none; gap: 10px; margin-top: 8px; }
 .power-shortcut:hover { color: var(--reject-ink); }
 .power-icon { flex: none; }
-.sidebar-status { padding: 14px 6px 4px; border-top: 1px solid var(--border); }
+.sidebar-status { margin-top: auto; padding: 14px 6px 4px; border-top: 1px solid var(--border); }
 
 .header-context { display: flex; align-items: center; gap: 18px; color: var(--text-secondary); font-size: 12px; }
 .header-divider { width: 1px; height: 30px; background: var(--border); }

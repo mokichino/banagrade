@@ -30,7 +30,7 @@ def test_status_reports_disabled_pipeline_without_fabrication(client) -> None:
     assert body["pipeline"]["camera"]["resolution"] is None
     assert body["pipeline"]["led"]["state"] == "error"
     assert body["pipeline"]["preprocessing"].startswith("Raw RGB")  # Stage 1 mask is off by default
-    assert [m["label"] for m in body["models"]["models"]] == ["stage1_best.pt", "stage2_best.pt", "best.pt"]
+    assert [m["label"] for m in body["models"]["models"]] == ["stage1_best.pt", "stage2_best.pt", "best.pt", "yolo11n.pt"]
     assert test_client.get("/api/camera/preview.mjpg").status_code == 503
 
 
@@ -79,7 +79,7 @@ def test_presence_model_can_be_disabled(monkeypatch) -> None:
     monkeypatch.setenv("BANAGRADE_PRESENCE_MODEL", "")
     inference = UltralyticsInference.from_environment()
     assert inference.presence_path is None
-    assert [m["key"] for m in inference.status()["models"]] == ["stage1", "stage2"]
+    assert [m["key"] for m in inference.status()["models"]] == ["stage1", "stage2", "objects"]
 
 
 def test_drift_endpoint_reports_insufficient_data_on_empty_database(client) -> None:

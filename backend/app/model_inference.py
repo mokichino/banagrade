@@ -82,6 +82,37 @@ def _covered(inner: list[float], outer: list[float]) -> float:
     return width * height / max(1e-6, (inner[2] - inner[0]) * (inner[3] - inner[1]))
 
 
+# The stock COCO YOLO11n also checks the trigger box just before capture, on the 640x360 preview.
+# "person" anywhere: every dataset photo scoring >= 0.30 has a hand or arm in it (no hand-free one passed
+# 0.28); hands holding a bunch on the rig scored 0.43 and 0.71. A flat palm seen from above scored 0.09.
+HAND_CONFIDENCE = 0.30
+# Another COCO object on the box: on the 344 dataset bunches nothing but "banana" reached 0.40 there
+# (the strongest was "oven" at 0.30), so a stronger, non-banana object is not graded as a bunch.
+OBJECT_CONFIDENCE = 0.40
+OBJECT_OVERLAP = 0.3  # IoU with the trigger box
+
+
+class ObjectCheck(NamedTuple):
+    hand: float  # best "person" confidence anywhere in view
+    other: tuple[str, float] | None  # a non-banana object on the trigger box, with its confidence
+
+
+def _iou(a: list[float] | tuple[float, ...], b: list[float] | tuple[float, ...]) -> float:
+    width = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    height = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = width * height
+    return inter / max(1e-6, (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter)
+
+
+def judge_objects(found: list[tuple[str, float, list[float]]], trigger_box: tuple[float, float, float, float]) -> ObjectCheck:
+    """Reduce COCO detections (name, confidence, xyxy) to a hand score and the strongest non-banana object on the box."""
+    hand = max((conf for name, conf, _ in found if name == "person"), default=0.0)
+    on_box = [(name, conf) for name, conf, xyxy in found if name != "person" and _iou(xyxy, trigger_box) >= OBJECT_OVERLAP]
+    banana = max((conf for name, conf in on_box if name == "banana"), default=0.0)
+    others = [(name, conf) for name, conf in on_box if name != "banana" and conf >= OBJECT_CONFIDENCE and conf > banana]
+    return ObjectCheck(hand, max(others, key=lambda item: item[1]) if others else None)
+
+
 def _best_box(model: Any, image: Any, confidence: float, source: str = "Stage 2") -> PresenceHit | None:
     result = model.predict(source=image, conf=confidence, imgsz=640, verbose=False)[0]
     if result.boxes is None or len(result.boxes.xyxy) == 0:
@@ -128,11 +159,14 @@ class UltralyticsInference:
         length_axis: str = "width",
         presence_path: str | Path | None = None,
         presence_confidence: float = 0.50,
+        object_path: str | Path | None = None,
     ) -> None:
         self.stage1_path = Path(stage1_path)
         self.stage2_path = Path(stage2_path)
         self.presence_path = Path(presence_path) if presence_path else None
         self.presence_confidence = presence_confidence
+        self.object_path = Path(object_path) if object_path else None
+        self._objects: Any = None  # stock COCO YOLO11n for the hand and object check
         self.length_axis = length_axis
         self._stage1: Any = None
         self._stage1_net: Any = None
@@ -156,6 +190,7 @@ class UltralyticsInference:
             os.getenv("BANAGRADE_LENGTH_AXIS", "width"),
             os.getenv("BANAGRADE_PRESENCE_MODEL", str(project_models / "presence" / "best.pt")) or None,
             float(os.getenv("BANAGRADE_PRESENCE_CONF", "0.50")),
+            os.getenv("BANAGRADE_OBJECT_MODEL", str(project_models / "presence" / "yolo11n.pt")) or None,
         )
 
     def load(self) -> None:
@@ -187,6 +222,7 @@ class UltralyticsInference:
         self._stage1_net = stage1.model.float().eval()
         self._stage1_transform = stage1_transform()
         self._load_presence(YOLO)
+        self._load_objects(YOLO)
         self._error = None
 
     def _load_presence(self, yolo: Any) -> None:
@@ -218,6 +254,39 @@ class UltralyticsInference:
             return
         person = [index for index, name in names.items() if name == "person"]
         self._presence, self._presence_classes, self._person_classes, self._presence_mode = presence, banana, person, "coco"
+
+    def _load_objects(self, yolo: Any) -> None:
+        """Load the stock COCO YOLO11n for the hand and object check. Optional: without it the check is skipped."""
+        self._objects = None
+        if self._presence_mode == "coco":  # the trigger already is that model
+            self._objects = self._presence
+            return
+        if self.object_path is None:
+            return
+        if not self.object_path.is_file():
+            self._model_errors["objects"] = f"Object model not found: {self.object_path}"
+            return
+        try:
+            objects = yolo(str(self.object_path))
+        except Exception as error:  # a corrupt optional model must not stop grading
+            self._model_errors["objects"] = f"Object model failed to load: {error}"
+            return
+        names = {str(name).strip().lower() for name in objects.names.values()}
+        if objects.task != "detect" or not {"person", "banana"} <= names:
+            self._model_errors["objects"] = "Expected a COCO YOLO11n detector with person and banana classes"
+            return
+        self._objects = objects
+
+    def check_objects(self, image: Any, trigger_box: tuple[float, float, float, float]) -> ObjectCheck:
+        """Hands in view and other COCO objects on the trigger box; an empty result when the model is not loaded."""
+        if self._objects is None:
+            return ObjectCheck(0.0, None)
+        result = self._objects.predict(source=image, conf=0.25, imgsz=640, verbose=False)[0]
+        if result.boxes is None or len(result.boxes.xyxy) == 0:
+            return ObjectCheck(0.0, None)
+        names = self._objects.names
+        found = [(str(names[int(c)]).lower(), float(p), xyxy) for c, p, xyxy in zip(result.boxes.cls.tolist(), result.boxes.conf.tolist(), result.boxes.xyxy.tolist())]
+        return judge_objects(found, trigger_box)
 
     @property
     def available(self) -> bool:
@@ -253,6 +322,11 @@ class UltralyticsInference:
                 *(
                     [{"key": "presence", "label": self.presence_path.name, **PRESENCE_ROLE.get(self._presence_mode, PRESENCE_ROLE[None]), "path": str(self.presence_path), "state": self._model_state("presence", self.presence_path, self._presence is not None)}]
                     if self.presence_path
+                    else []
+                ),
+                *(
+                    [{"key": "objects", "label": self.object_path.name, "architecture": "YOLO11n-det, COCO-pretrained", "task": "Hand and object check before capture (COCO person and 79 other classes)", "path": str(self.object_path), "state": self._model_state("objects", self.object_path, self._objects is not None)}]
+                    if self.object_path and self._presence_mode != "coco"
                     else []
                 ),
             ],

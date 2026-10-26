@@ -10,7 +10,7 @@ pytest.importorskip("cv2")
 
 from app.frames import save_frame  # noqa: E402
 from app.leds import LedController, LedState  # noqa: E402
-from app.model_inference import Stage1Prediction, Stage2Prediction  # noqa: E402
+from app.model_inference import ObjectCheck, Stage1Prediction, Stage2Prediction, judge_objects  # noqa: E402
 from app.pipeline import OVERLAY_CHECKING, OVERLAY_GRADE, OVERLAY_PROBLEM, OVERLAY_READY, PipelineState, PresencePipeline, PreviewOverlay, draw_overlay  # noqa: E402
 from app.storage import Storage  # noqa: E402
 
@@ -38,6 +38,11 @@ class FakeInference:
     def classify(self, image):
         self.stage1_inputs.append(image)
         return Stage1Prediction(self.label, self.confidence, 12.0)
+
+    objects = ObjectCheck(0.0, None)
+
+    def check_objects(self, image, trigger_box):
+        return self.objects
 
     def detect(self, image):
         self.stage2_calls += 1
@@ -467,3 +472,46 @@ def test_bunch_already_on_the_table_at_startup_is_not_scanned_until_removed(tmp_
     assert len(scans) == 1
     scans, pipeline = _held_run(tmp_path, monkeypatch, [True] * 12)
     assert scans == [] and pipeline._overlay.label == "On the table at startup · remove it to scan"
+
+
+def test_object_check_finds_hands_and_other_objects_but_not_bananas() -> None:
+    box = (100.0, 50.0, 400.0, 300.0)
+    assert judge_objects([("banana", 0.93, [100, 50, 400, 300])], box) == ObjectCheck(0.0, None)
+    assert judge_objects([("person", 0.43, [0, 0, 120, 200]), ("banana", 0.40, [110, 60, 390, 290])], box).hand == 0.43
+    assert judge_objects([("cell phone", 0.71, [110, 60, 380, 290])], box).other == ("cell phone", 0.71)
+    assert judge_objects([("oven", 0.30, [100, 50, 400, 300])], box).other is None  # the strongest dataset false hit
+    assert judge_objects([("cup", 0.55, [100, 50, 400, 300]), ("banana", 0.80, [100, 50, 400, 300])], box).other is None
+    assert judge_objects([("airplane", 0.93, [200, 120, 260, 170])], box).other is None  # off the box (the X drawn on the paper)
+
+
+@pytest.mark.parametrize(
+    ("objects", "label", "ignored"),
+    [
+        (ObjectCheck(0.43, None), "Hand in view (0.43) · let go to scan", None),
+        (ObjectCheck(0.0, ("cell phone", 0.71)), "Not a bunch · looks like a cell phone (0.71)", "Not a bunch · looks like a cell phone (0.71)"),
+    ],
+)
+def test_hand_or_other_object_stops_the_capture(tmp_path, objects, label, ignored) -> None:
+    detector = SequenceDetector([((101.0, 101.0, 301.0, 251.0), 0.91, "presence")])
+    detector.objects = objects
+    pipeline = _pipeline(tmp_path, detector)
+    assert asyncio.run(pipeline._stable_and_in_frame(None, (100.0, 100.0, 300.0, 250.0))) is False
+    assert pipeline._overlay.label == label
+    assert pipeline._ignored_label == ignored
+
+
+def test_an_ignored_object_is_not_rechecked_until_the_table_changes(tmp_path, monkeypatch) -> None:
+    detector = CountingDetector()
+    pipeline = _pipeline(tmp_path, detector)
+    monkeypatch.setattr("app.pipeline.time.monotonic", lambda: 100.0)
+    phone = _velvet(1)
+    phone[90:270, 160:480] = (40, 60, 200)
+    detector.bunch = ((80.0, 45.0, 240.0, 135.0), 0.90, "presence")
+    asyncio.run(pipeline._presence_check(phone))
+    pipeline._ignored_label = "Not a bunch · looks like a cell phone (0.71)"
+    asyncio.run(pipeline._presence_check(phone))
+    assert detector.runs == 1 and pipeline._ignored_label is not None
+    moved = _velvet(2)
+    moved[60:240, 100:420] = (40, 60, 200)
+    asyncio.run(pipeline._presence_check(moved))
+    assert detector.runs == 2 and pipeline._ignored_label is None

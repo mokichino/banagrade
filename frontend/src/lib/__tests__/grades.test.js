@@ -43,7 +43,8 @@ describe('LED mirror', () => {
     expect(ledInfo('booting').color).toBe('Slow red blink')
     expect(ledInfo('error').color).toBe('Fast red blink')
     expect(ledInfo('nonsense').tone).toBe('offline')
-    expect(LED_LEGEND).toHaveLength(6)
+    expect(ledInfo('check')).toMatchObject({ color: 'Fast red blink', label: 'Check by hand' })  // same lamp, not a fault
+    expect(LED_LEGEND).toHaveLength(7)
   })
 })
 
@@ -57,5 +58,20 @@ describe('LED signal board', async () => {
     expect(lampPattern('booting').red).toBe('slow')
     expect(lampPattern('error').red).toBe('fast')
     expect(Object.values(lampPattern('offline')).every(v => v === 'off')).toBe(true)
+  })
+})
+
+describe('failure reasons', async () => {
+  const { failureReason } = await import('../grades.js')
+
+  it('says why a scan was not graded', () => {
+    expect(failureReason({ final_grade: null, rejection_reason: 'LOW_CONFIDENCE', stage1_status: 'Unhealthy', stage1_confidence: 0.65, error_details: 'Stage 1 confidence 0.65 is below 0.80' }))
+      .toBe('Unsure: Unhealthy 65% (needs 80%) · check by hand')
+    expect(failureReason({ final_grade: null, rejection_reason: 'DETECTION_FAILED', stage2_confidence: 0.874, error_details: 'Stage 2 confidence 0.87 is below 0.90' }))
+      .toBe('Not measured: outline 87% (needs 90%) · check by hand')
+    expect(failureReason({ final_grade: null, rejection_reason: 'DETECTION_FAILED', stage2_confidence: null })).toBe('Not measured: no outline found · check by hand')
+    expect(failureReason({ final_grade: null, rejection_reason: 'NOT_A_BUNCH' })).toBe('Not a bunch: no banana colour')
+    expect(failureReason({ final_grade: 'Rejected', rejection_reason: 'SURFACE_UNHEALTHY' })).toBe('Unhealthy at Stage 1')
+    expect(failureReason({ final_grade: 'Class A' })).toBe('')
   })
 })

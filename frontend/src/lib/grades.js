@@ -24,6 +24,29 @@ export function finalGradeLabel(scan) {
   return isTechnicalFailure(scan) ? 'Technical failure' : scan.final_grade
 }
 
+const REASONS = { SURFACE_UNHEALTHY: 'Unhealthy at Stage 1' }
+
+/** Why a scan was not graded, in plain words; '' for a graded scan. Thresholds come from the stored error text. */
+export function failureReason(scan) {
+  if (!scan) return ''
+  if (!isTechnicalFailure(scan)) return REASONS[scan.rejection_reason] || ''
+  const limit = String(scan.error_details || '').match(/below (\d+(?:\.\d+)?)/)
+  const needs = limit ? ` (needs ${Math.round(Number(limit[1]) * 100)}%)` : ''
+  const percent = value => `${Math.round(Number(value) * 100)}%`
+  switch (scan.rejection_reason) {
+    case 'LOW_CONFIDENCE':
+      return `Unsure: ${scan.stage1_status || 'Stage 1'} ${percent(scan.stage1_confidence)}${needs} · check by hand`
+    case 'DETECTION_FAILED':
+      return scan.stage2_confidence != null ? `Not measured: outline ${percent(scan.stage2_confidence)}${needs} · check by hand` : 'Not measured: no outline found · check by hand'
+    case 'NOT_A_BUNCH':
+      return 'Not a bunch: no banana colour'
+    case 'PIPELINE_ERROR':
+      return `Scan error: ${scan.error_details || 'see System Status'}`
+    default:
+      return scan.error_details || ''
+  }
+}
+
 export function finalGradeKey(scan) {
   return GRADES[scan?.final_grade]?.key || 't'
 }

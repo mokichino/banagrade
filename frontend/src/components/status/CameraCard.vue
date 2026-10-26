@@ -32,6 +32,20 @@ const illumination = computed(() => {
   if (value.status === 'ok') return { text: `OK · brightness ${value.mean_brightness}`, tone: 'ok' }
   return { text: value.status === 'dark' ? 'Too dark — check ring light' : 'Lens obstructed', tone: 'bad' }
 })
+const expectedCm = computed(() => camera.value.expected_distance_cm || 45)
+const rigHeight = computed(() => {
+  const distance = camera.value.focus_distance_cm
+  const check = camera.value.distance_check
+  if (!check) return { text: 'Not measured', tone: 'muted', warning: '' }
+  const text = `≈ ${Math.round(distance)} cm · expected ${expectedCm.value}`
+  if (check === 'ok') return { text, tone: 'ok', warning: '' }
+  const way = check === 'too_far' ? 'farther than' : 'closer than'
+  return {
+    text,
+    tone: 'bad',
+    warning: `Autofocus locked about ${Math.round(distance)} cm away, ${way} the ${expectedCm.value} cm rig height. The Class A width threshold only holds at ${expectedCm.value} cm: check the camera mount, then reboot with the empty rig in view so autofocus locks again.`
+  }
+})
 const autofocus = computed(() => {
   if (camera.value.autofocus === 'locked') return { text: `Locked · ${camera.value.lens_position_dioptres} dpt`, tone: 'ok' }
   if (camera.value.autofocus === 'unlocked') return { text: 'Not locked', tone: 'bad' }
@@ -42,7 +56,7 @@ const autofocus = computed(() => {
 <template>
   <div class="panel camera-card">
     <div class="panel-heading">
-      <div><p class="eyebrow">Camera utility</p><h2>Live top-down preview</h2><p class="muted">Raspberry Pi Camera Module 3 · fixed {{ camera.distance_cm || 45 }} cm above the black velvet surface</p></div>
+      <div><p class="eyebrow">Camera utility</p><h2>Live top-down preview</h2><p class="muted">Raspberry Pi Camera Module 3 · {{ expectedCm }} cm above the black velvet surface</p></div>
       <span :class="['status-badge', camera.available ? 'loaded' : 'missing']">{{ camera.available ? 'Streaming' : 'Offline' }}</span>
     </div>
     <div class="camera-preview">
@@ -58,7 +72,9 @@ const autofocus = computed(() => {
     <dl class="camera-meta">
       <div><dt>Capture resolution</dt><dd>{{ camera.resolution || 'Unavailable' }}</dd></div>
       <div><dt>Autofocus</dt><dd :class="autofocus.tone">{{ autofocus.text }}</dd></div>
+      <div><dt>Rig height (from focus)</dt><dd :class="rigHeight.tone">{{ rigHeight.text }}</dd></div>
       <div><dt>LED ring light</dt><dd :class="illumination.tone">{{ illumination.text }}</dd></div>
     </dl>
+    <p v-if="rigHeight.warning" class="camera-warning bad small">{{ rigHeight.warning }}</p>
   </div>
 </template>

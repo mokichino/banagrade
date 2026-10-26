@@ -11,7 +11,7 @@ pytest.importorskip("cv2")
 from app.frames import save_frame  # noqa: E402
 from app.leds import LedController, LedState  # noqa: E402
 from app.model_inference import Stage1Prediction, Stage2Prediction  # noqa: E402
-from app.pipeline import OVERLAY_CHECKING, OVERLAY_GRADE, OVERLAY_PROBLEM, OVERLAY_READY, PresencePipeline, PreviewOverlay, distance_check, draw_overlay, focus_distance_cm  # noqa: E402
+from app.pipeline import OVERLAY_CHECKING, OVERLAY_GRADE, OVERLAY_PROBLEM, OVERLAY_READY, PipelineState, PresencePipeline, PreviewOverlay, draw_overlay  # noqa: E402
 from app.storage import Storage  # noqa: E402
 
 
@@ -311,10 +311,95 @@ def test_weak_stage2_box_is_a_technical_failure_not_a_grade(tmp_path) -> None:
     assert pipeline._held_label == "Technical failure"
 
 
-@pytest.mark.parametrize(
-    ("lens_position", "distance", "check"),
-    [(2.222, 45.0, "ok"), (0.818, 122.2, "too_far"), (3.5, 28.6, "too_close"), (0.0, None, None), (None, None, None)],
-)
-def test_focus_distance_flags_a_camera_off_the_rig_height(lens_position, distance, check) -> None:
-    assert focus_distance_cm(lens_position) == distance
-    assert distance_check(focus_distance_cm(lens_position)) == check
+
+class PaperCamera(FakeCamera):
+    """A white sheet on the velvet: bright but colourless, like the paper graded Class B on 2026-10-26."""
+
+    def capture_array(self, stream: str):
+        frame = super().capture_array(stream)
+        frame[frame[..., 2] == 220] = 235
+        return frame
+
+
+def test_colourless_object_is_not_graded(tmp_path) -> None:
+    storage = Storage(tmp_path / "p.db")
+    storage.initialize()
+    storage.ensure_active_session()
+    inference = FakeInference("Healthy", 2400.0)
+    pipeline = PresencePipeline(storage, inference, LedController(outputs=None))
+    pipeline._camera = PaperCamera()
+    asyncio.run(pipeline._process_scan())
+    scan = storage.get_scan(pipeline.last_scan_id)
+    assert scan["final_grade"] is None
+    assert scan["rejection_reason"] == "NOT_A_BUNCH"
+    assert "banana-coloured" in scan["error_details"]
+    assert inference.stage1_inputs == [] and inference.stage2_calls == 0
+    assert pipeline.leds.state is LedState.ERROR
+    assert pipeline._held_label == "Not a bunch · no banana colour"
+
+
+class FocusCamera:
+    def __init__(self) -> None:
+        self.controls = []
+
+    def set_controls(self, values) -> None:
+        self.controls.append(values)
+
+    def autofocus_cycle(self) -> None:
+        pass
+
+    def capture_metadata(self):
+        return {"LensPosition": 1.31}
+
+
+@pytest.fixture()
+def fake_libcamera(monkeypatch):
+    import enum
+    import sys
+    import types
+
+    controls = types.SimpleNamespace(AfModeEnum=enum.Enum("AfModeEnum", "Manual Auto"))
+    monkeypatch.setitem(sys.modules, "libcamera", types.SimpleNamespace(controls=controls))
+    return controls
+
+
+@pytest.mark.parametrize(("setting", "mode", "position"), [(None, "fixed", 0.99), ("1.2", "fixed", 1.2), ("auto", "autofocus", 1.31)])
+def test_lens_is_held_at_the_calibrated_position_unless_set_to_auto(tmp_path, monkeypatch, fake_libcamera, setting, mode, position) -> None:
+    if setting is None:
+        monkeypatch.delenv("BANAGRADE_LENS_POSITION", raising=False)
+    else:
+        monkeypatch.setenv("BANAGRADE_LENS_POSITION", setting)
+    pipeline = PresencePipeline(Storage(tmp_path / "p.db"), FakeInference("Healthy", 2400.0), LedController(outputs=None))
+    pipeline._camera = FocusCamera()
+    pipeline._lock_focus()
+    assert (pipeline.focus_mode, pipeline.lens_position) == (mode, position)
+    assert pipeline._camera.controls[-1] == {"AfMode": fake_libcamera.AfModeEnum.Manual, "LensPosition": position}
+    camera = asyncio.run(pipeline.status())["camera"]
+    assert (camera["focus"], camera["lens_position_dioptres"], camera["expected_distance_cm"]) == (mode, position, 45)
+
+
+def test_trigger_box_on_paper_is_labelled_and_never_captured(tmp_path, monkeypatch) -> None:
+    detector = CountingDetector()
+    detector.bunch = ((150.0, 60.0, 450.0, 300.0), 0.93, "presence")
+    pipeline = _pipeline(tmp_path, detector)
+    pipeline.presence_interval_s = 0
+    monkeypatch.setattr("app.pipeline.time.monotonic", lambda: 100.0)
+    paper = _velvet(1)
+    paper[60:300, 150:450] = (232, 236, 238)
+    frames = [paper.copy() for _ in range(8)]
+
+    async def capture():
+        if not frames:
+            raise asyncio.CancelledError
+        return frames.pop()
+
+    async def no_scan():
+        raise AssertionError("paper must not be captured")
+
+    monkeypatch.setattr(pipeline, "_capture_lores", capture)
+    monkeypatch.setattr(pipeline, "_process_scan", no_scan)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(pipeline._run())
+    assert pipeline._overlay.label == "Not a bunch · no banana colour"
+    assert pipeline.state is PipelineState.IDLE and pipeline.leds.state is LedState.READY
+    assert detector.runs == 1  # the unchanged sheet is not re-checked every frame

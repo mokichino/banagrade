@@ -20,16 +20,25 @@ Run commands from a laptop on the same Wi-Fi, or over SSH on the Pi. `PI` below 
 2. Check the camera is level and the ring light is centred on the lens.
 3. Open **System Status** and look at the camera preview. The velvet should fill the frame with no table
    edge or floor showing.
-4. Restart the service so autofocus recalibrates on the real table: `sudo systemctl restart banagrade`.
-   Then read **Autofocus** on the camera card (`Locked · N dpt`). At 45 cm N should be about **2.2 dioptres**
-   (1 ÷ 0.45 m). A value near 0.9 means it focused about 1 m away. Fix the mount and restart.
+4. Read **Lens focus** on the camera card. It should say `Fixed · 0.99 dpt (set at 45 cm)`. The lens is held
+   there instead of autofocusing at boot, because autofocus on the bare velvet locked anywhere from 0.69 to
+   1.31 dpt. 0.99 is what this camera read with a printed target at a tape-measured 45 cm (0.983, 0.989,
+   1.012 on 2026-10-26). Its lens positions do not follow 1 ÷ metres, so do not expect 2.2.
+5. Take a **Full-resolution snapshot** with a sheet of short bond paper (27.9 × 21.6 cm) on the velvet. At
+   45 cm the whole sheet fits with velvet on every side, about 2320 × 1760 px. If it runs off the frame the
+   camera is too low; if it is much smaller it is too high. After replacing the camera or its mount, find the
+   new lens position: set `BANAGRADE_LENS_POSITION=auto`, restart with the sheet in view a few times, and put
+   the average back into `BANAGRADE_LENS_POSITION`.
+6. Remove the sheet. The trigger boxes it, but the preview labels it "Not a bunch · no banana colour" and
+   nothing is captured.
 
 | Check | Result |
 |---|---|
 | Lens-to-velvet distance (cm) | |
 | Camera level, ring light centred (yes / no) | |
 | Velvet fills the preview (yes / no) | |
-| Lens position after restart (dioptres) | |
+| Lens focus on the camera card | |
+| Paper size in the snapshot (px) | |
 
 ## 2. LED wiring
 

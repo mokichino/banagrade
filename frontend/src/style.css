@@ -214,7 +214,7 @@ nav { display: grid; gap: 3px; }
 .camera-offline { display: grid; gap: 6px; padding: 20px; color: #d1d5db; text-align: center; font-size: 13px; }
 .camera-offline strong { color: #fca5a5; font-size: 14px; }
 .preview-tag { position: absolute; left: 10px; bottom: 10px; border-radius: 4px; padding: 3px 8px; background: rgba(0, 0, 0, .55); color: #e5e7eb; font-size: 11px; }
-.camera-meta { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 0; }
+.camera-meta { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 0; }
 .camera-meta div { padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .camera-meta dt { color: var(--text-muted); font-size: 11px; }
 .camera-meta dd { margin: 4px 0 0; color: var(--text); font-size: 14px; font-weight: 600; }
@@ -262,7 +262,7 @@ nav { display: grid; gap: 3px; }
 @media (max-width: 1100px) {
   .volume-row { grid-template-columns: 1fr; }
   .chart-grid, .status-stack { grid-template-columns: 1fr; }
-  .telemetry-grid, .camera-meta { grid-template-columns: repeat(2, 1fr); }
+  .telemetry-grid { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 860px) {
   :root { --sidebar-w: 0px; --mobile-nav-h: 108px; }
@@ -343,7 +343,6 @@ nav { display: grid; gap: 3px; }
 .demo-chip { border: 1px dashed #d97706; border-radius: 999px; padding: 4px 10px; background: #fffbeb; color: #92400e; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; cursor: help; }
 
 .camera-actions { display: flex; align-items: center; gap: 12px; margin: 0 0 16px; }
-.camera-warning { margin: 12px 0 0; line-height: 1.45; }
 .power-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0 0; }
 .power-confirm p { margin: 14px 0 0; line-height: 1.45; }
 .primary-button.danger { background: var(--reject); }

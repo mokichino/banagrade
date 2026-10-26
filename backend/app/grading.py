@@ -34,6 +34,7 @@ class RejectionReason(StrEnum):
     CAMERA_ERROR = "CAMERA_ERROR"
     ILLUMINATION_ERROR = "ILLUMINATION_ERROR"
     PIPELINE_ERROR = "PIPELINE_ERROR"
+    NOT_A_BUNCH = "NOT_A_BUNCH"
     # Retained so rows written by earlier cm-based builds still render.
     UNDERSIZED = "UNDERSIZED"
     CALIBRATION_INVALID = "CALIBRATION_INVALID"

@@ -3,7 +3,7 @@ import pytest
 np = pytest.importorskip("numpy")
 pytest.importorskip("cv2")
 
-from app.preprocessing import frame_health, hsv_mask, stage1_input  # noqa: E402
+from app.preprocessing import colour_share, frame_health, hsv_mask, stage1_input  # noqa: E402
 
 
 def _scene() -> "np.ndarray":
@@ -32,3 +32,12 @@ def test_frame_health_flags_covered_lens_and_flat_frames() -> None:
     assert frame_health(_scene()).ok
     assert frame_health(np.zeros((360, 640, 3), np.uint8)).status == "dark"
     assert frame_health(np.full((360, 640, 3), 120, np.uint8)).status == "obstructed"
+
+
+def test_colour_share_separates_banana_skin_from_paper_and_velvet() -> None:
+    frame = np.full((2592, 4608, 3), 5, np.uint8)  # velvet
+    assert colour_share(frame) == 0.0
+    frame[:, :2304] = (40, 200, 220)  # yellow-green skin (BGR) over half the frame
+    assert colour_share(frame) == pytest.approx(0.5, abs=0.01)
+    frame[:, :2304] = (232, 236, 238)  # white paper
+    assert colour_share(frame) == 0.0

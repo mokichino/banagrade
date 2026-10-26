@@ -72,7 +72,7 @@ Last updated: 2026-10-25.
 - [x] `deploy/banagrade.service` installed and enabled on `cardavapi` (device check 2026-10-25: active since boot, `uvicorn main:app`).
 - [x] Nightly database backup: `scripts/backup_db.py` uses SQLite's online backup, verifies integrity and row counts, and keeps 14 copies; `deploy/banagrade-backup.timer` runs it at 23:30 (`test_backup.py`). The CSV export round-trips every stored value, including commas, quotes and newlines (`test_api.py::test_csv_export_round_trips…`); the PDF is covered by `pdf.test.js`.
 - [ ] Confirm the physical LED wiring matches BCM green 17, yellow 27, blue 22, red 23, or set `BANAGRADE_LED_*` (`ON_SITE_TESTS.md` §2).
-- [ ] Verify the 45 cm mounting, ring light and black velvet on the real sorting table. The autofocus lock should read about 2.2 dpt; the 0.92 dpt recorded on 2026-10-19 was taken on a desk, not the rig (`ON_SITE_TESTS.md` §1).
+- [ ] Verify the 45 cm mounting, ring light and black velvet on the real sorting table. Mount confirmed at 45 cm by tape and paper snapshot on 2026-10-26; the lens is now held at 0.99 dpt, measured there, instead of autofocusing on the velvet (`ON_SITE_TESTS.md` §1).
 - [ ] Fill §4.7 of the thesis: Stage 1 and Stage 2 latency, end-to-end time, a sustained run duration, scan count and average CPU temperature (`ON_SITE_TESTS.md` §7, `scripts/shift_report.py`).
 - [ ] Test recovery after reboot, power loss and Wi-Fi loss (`ON_SITE_TESTS.md` §5–6).
 - [ ] Install the backup timer on the Pi and run the export checks (`ON_SITE_TESTS.md` §8).

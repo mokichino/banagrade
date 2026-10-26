@@ -86,15 +86,13 @@ describe('status cards with no data', () => {
   })
 })
 
-describe('rig height and power', () => {
-  const camera = extra => ({ camera: { available: false, expected_distance_cm: 45, autofocus: 'locked', lens_position_dioptres: 0.818, ...extra } })
+describe('lens focus and power', () => {
+  const camera = extra => ({ camera: { available: true, expected_distance_cm: 45, ...extra } })
 
-  it('CameraCard warns when autofocus locked far from the rig height', () => {
-    const wrapper = mount(CameraCard, { props: { pipeline: camera({ focus_distance_cm: 122.2, distance_check: 'too_far' }) } })
-    expect(wrapper.text()).toContain('≈ 122 cm · expected 45')
-    expect(wrapper.find('.camera-warning').text()).toContain('farther than the 45 cm rig height')
-    const ok = mount(CameraCard, { props: { pipeline: camera({ focus_distance_cm: 46.1, distance_check: 'ok' }) } })
-    expect(ok.find('.camera-warning').exists()).toBe(false)
+  it('CameraCard shows the fixed lens position calibrated at the rig height', () => {
+    expect(mount(CameraCard, { props: { pipeline: camera({ focus: 'fixed', lens_position_dioptres: 0.99 }) } }).text()).toContain('Fixed · 0.99 dpt (set at 45 cm)')
+    expect(mount(CameraCard, { props: { pipeline: camera({ focus: 'autofocus', lens_position_dioptres: 1.31 }) } }).text()).toContain('Autofocus · 1.31 dpt')
+    expect(mount(CameraCard, { props: { pipeline: camera({ focus: 'unset', lens_position_dioptres: null }) } }).find('dd.bad').text()).toBe('Not set')
   })
 
   it('PowerCard disables both buttons until polkit allows them', () => {

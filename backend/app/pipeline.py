@@ -24,7 +24,7 @@ from .frames import save_frame
 from .grading import REFERENCE_RESOLUTION, Stage1Result, decide_grade, scale_width_to_reference, width_threshold_px
 from .leds import LedController, LedState
 from .model_inference import PresenceHit
-from .preprocessing import MaskSettings, frame_health, stage1_input
+from .preprocessing import MaskSettings, colour_share, frame_health, stage1_input
 from .storage import Storage, now_iso
 
 Publish = Callable[[dict[str, Any]], Awaitable[None]]
@@ -35,10 +35,14 @@ OVERLAY_READY = (94, 197, 34)  # green
 OVERLAY_PROBLEM = (38, 38, 220)  # red
 OVERLAY_GRADE = {"Class A": (0, 163, 217), "Class B": (235, 99, 37), "Rejected": (38, 38, 220)}
 OVERLAY_FAILURE = (128, 128, 128)
+NOT_A_BUNCH_LABEL = "Not a bunch · no banana colour"
 
 # The width threshold only holds at the thesis rig height (Section 3.6.3), lens to velvet surface.
 RIG_DISTANCE_CM = 45
-DISTANCE_TOLERANCE_CM = 10
+# This Camera Module 3's LensPosition with a printed target at a tape-measured 45 cm: 0.983, 0.989 and
+# 1.012 dpt (2026-10-26). It does not follow 1 / metres (that would be 2.22), and autofocus on the bare
+# velvet locked anywhere from 0.69 to 1.31 dpt, so the lens is held here instead of autofocusing at boot.
+RIG_LENS_POSITION = "0.99"
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,27 +69,6 @@ def frame_changed(before: Any, after: Any, level: int = 25, fraction: float = 0.
     import numpy as np
 
     return float(np.mean(np.abs(after - before) > level)) > fraction
-
-
-def focus_distance_cm(lens_position: float | None) -> float | None:
-    """Distance the autofocus locked on, from Camera Module 3's LensPosition (dioptres = 1 / metres).
-
-    The lens calibration is approximate, so this is a sanity check on the rig height, not a measurement.
-    0 dioptres is infinity, so it has no distance.
-    """
-    if not lens_position or lens_position <= 0:
-        return None
-    return round(100 / lens_position, 1)
-
-
-def distance_check(distance_cm: float | None) -> str | None:
-    if distance_cm is None:
-        return None
-    if distance_cm > RIG_DISTANCE_CM + DISTANCE_TOLERANCE_CM:
-        return "too_far"
-    if distance_cm < RIG_DISTANCE_CM - DISTANCE_TOLERANCE_CM:
-        return "too_close"
-    return "ok"
 
 
 def draw_overlay(frame: Any, overlay: PreviewOverlay, scale: float) -> Any:
@@ -168,6 +151,11 @@ class PresencePipeline:
         # Full-resolution frames for disputes; ~0.9 MB each, so the default cap is about 1 GB. 0 disables.
         self.frame_dir = Path(os.getenv("BANAGRADE_FRAME_DIR", storage.path.parent / "frames"))
         self.frame_keep = int(os.getenv("BANAGRADE_FRAME_KEEP", "1000"))
+        # A frame with less than this share of clearly coloured pixels is not graded (paper, an empty tray).
+        # The palest dataset bunch scored 0.19 and paper 0.014; 0 disables the check.
+        self.min_colour_share = float(os.getenv("BANAGRADE_MIN_COLOUR_SHARE", "0.05"))
+        # Dioptres to hold the lens at, or "auto" for one autofocus cycle at boot.
+        self.lens_setting = os.getenv("BANAGRADE_LENS_POSITION", RIG_LENS_POSITION).strip().lower()
         self.leds = leds or LedController(on_change=self._on_led_change)
         self.state = PipelineState.BOOTING
         self.last_error: str | None = None
@@ -175,12 +163,14 @@ class PresencePipeline:
         self.started_at = time.time()
         self.illumination: dict[str, Any] | None = None
         self.lens_position: float | None = None
+        self.focus_mode: str | None = None  # "fixed" or "autofocus" once set
         self.camera_resolution: tuple[int, int] | None = None
         self._publish: Publish | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._task: asyncio.Task[None] | None = None
         self._camera: Any = None
         self._hold = False
+        self._not_a_bunch = False  # the trigger's box is on something colourless, e.g. paper
         self._latest_jpeg: bytes | None = None
         self._latest_jpeg_at = 0.0
         self._overlay: PreviewOverlay | None = None
@@ -201,7 +191,6 @@ class PresencePipeline:
 
     async def status(self) -> dict[str, Any]:
         resolution = self.camera_resolution
-        distance = focus_distance_cm(self.lens_position)
         return {
             "available": self.camera_available,
             "enabled": self.enabled,
@@ -224,9 +213,7 @@ class PresencePipeline:
                 "available": self.camera_available,
                 "resolution": f"{resolution[0]}x{resolution[1]}" if resolution else None,
                 "expected_distance_cm": RIG_DISTANCE_CM,
-                "focus_distance_cm": distance,
-                "distance_check": distance_check(distance),
-                "autofocus": "locked" if self.lens_position is not None else ("unlocked" if self.camera_available else None),
+                "focus": self.focus_mode if self.lens_position is not None else ("unset" if self.camera_available else None),
                 "lens_position_dioptres": self.lens_position,
                 "illumination": self.illumination,
             },
@@ -301,19 +288,24 @@ class PresencePipeline:
         self._lock_focus()
 
     def _lock_focus(self) -> None:
-        """Run one autofocus cycle at boot, then hold the lens fixed (Section 3.6.3)."""
+        """Hold the lens at BANAGRADE_LENS_POSITION, or run one autofocus cycle and hold that (Section 3.6.3)."""
         try:
             from libcamera import controls  # type: ignore[import-not-found]
 
+            if self.lens_setting != "auto":
+                position = float(self.lens_setting)
+                self._camera.set_controls({"AfMode": controls.AfModeEnum.Manual, "LensPosition": position})
+                self.lens_position, self.focus_mode = round(position, 3), "fixed"
+                return
             self._camera.set_controls({"AfMode": controls.AfModeEnum.Auto})
             self._camera.autofocus_cycle()
             position = self._camera.capture_metadata().get("LensPosition")
             if position is not None:
                 self._camera.set_controls({"AfMode": controls.AfModeEnum.Manual, "LensPosition": float(position)})
-                self.lens_position = round(float(position), 3)
-        except Exception as error:  # cameras without autofocus or missing controls
+                self.lens_position, self.focus_mode = round(float(position), 3), "autofocus"
+        except Exception as error:  # cameras without autofocus, missing controls or a bad setting
             self.lens_position = None
-            self.last_error = f"Autofocus lock unavailable: {error}"
+            self.last_error = f"Lens focus unavailable: {error}"
 
     # -------------------------------------------------------------- event plumbing
     def _on_led_change(self, state: LedState) -> None:
@@ -385,6 +377,7 @@ class PresencePipeline:
             detection = await self._presence_check(frame)
             if detection is None:
                 self._overlay = None
+                self._not_a_bunch = False
                 if self._hold or self.state is not PipelineState.IDLE:
                     self._hold = False
                     await self._set_state(PipelineState.IDLE)
@@ -394,6 +387,15 @@ class PresencePipeline:
             box, confidence, source = detection
             if self._hold:  # result shown until the bunch is removed
                 self._show(box, self._held_label, self._held_color)
+                await asyncio.sleep(self.presence_interval_s)
+                continue
+            # The trigger was trained on bunches only and also boxes paper; show those, never capture them.
+            self._not_a_bunch = colour_share(frame) < self.min_colour_share
+            if self._not_a_bunch:
+                self._show(box, NOT_A_BUNCH_LABEL, OVERLAY_FAILURE)
+                if self.state is not PipelineState.IDLE:
+                    await self._set_state(PipelineState.IDLE)
+                    self.leds.set(LedState.READY)
                 await asyncio.sleep(self.presence_interval_s)
                 continue
             self._show(box, f"Bunch {confidence:.2f} ({source}) · hold still", OVERLAY_CHECKING)
@@ -411,7 +413,7 @@ class PresencePipeline:
         """
         signature = change_signature(frame)
         now = time.monotonic()
-        steady = self._last_detection is None or self._hold
+        steady = self._last_detection is None or self._hold or self._not_a_bunch
         if (
             steady
             and self._reference is not None
@@ -461,6 +463,9 @@ class PresencePipeline:
             await self._set_state(PipelineState.CAPTURING)
             self.leds.set(LedState.CAPTURE)
             image = await asyncio.to_thread(self._camera.capture_array, "main")
+            share = await asyncio.to_thread(colour_share, image)
+            if share < self.min_colour_share:
+                raise NotABunch(f"Only {share:.1%} of the frame is banana-coloured (needs {self.min_colour_share:.0%}), so it is not graded as a bunch")
 
             await self._set_state(PipelineState.CLASSIFYING)
             prepared = await asyncio.to_thread(self._stage1_image, image)
@@ -517,7 +522,7 @@ class PresencePipeline:
             raise
         except Exception as error:
             self.last_error = str(error)
-            reason = "LOW_CONFIDENCE" if isinstance(error, LowConfidence) else "PIPELINE_ERROR"
+            reason = "LOW_CONFIDENCE" if isinstance(error, LowConfidence) else "NOT_A_BUNCH" if isinstance(error, NotABunch) else "PIPELINE_ERROR"
             self.storage.save_scan({
                 "scan_id": scan_id, "session_id": session_id, "captured_at": captured_at, "completed_at": now_iso(),
                 "stage1_status": stage1.label if stage1 else None,
@@ -527,7 +532,8 @@ class PresencePipeline:
                 "image_refs": frame_refs if image is not None else None,
             })
             self.leds.set(LedState.ERROR)
-            self._held_label, self._held_color = "Technical failure", OVERLAY_FAILURE
+            self._held_label = NOT_A_BUNCH_LABEL if isinstance(error, NotABunch) else "Technical failure"
+            self._held_color = OVERLAY_FAILURE
             await self._set_state(PipelineState.HOLD)
             await self._emit("pipeline_error", {"scan_id": scan_id, "error": self.last_error})
             await self._emit("scan_completed", {"scan": self.storage.get_scan(scan_id)})
@@ -553,4 +559,8 @@ class PresencePipeline:
 
 
 class LowConfidence(ValueError):
+    pass
+
+
+class NotABunch(ValueError):
     pass

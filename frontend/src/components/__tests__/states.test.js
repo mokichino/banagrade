@@ -8,6 +8,8 @@ import HardwareStatusCard from '../status/HardwareStatusCard.vue'
 import DriftCard from '../status/DriftCard.vue'
 import CameraCard from '../status/CameraCard.vue'
 import PowerCard from '../status/PowerCard.vue'
+import PowerDialog from '../PowerDialog.vue'
+import AppSidebar from '../layout/AppSidebar.vue'
 import DashboardView from '../../views/DashboardView.vue'
 import HistoryView from '../../views/HistoryView.vue'
 import SystemStatusView from '../../views/SystemStatusView.vue'
@@ -113,6 +115,42 @@ describe('rig height and power', () => {
     await flushPromises()
     expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ action: 'reboot' })
     expect(wrapper.text()).toContain('Rebooting.')
+  })
+})
+
+describe('sidebar power shortcut', () => {
+  it('the sidebar power icon asks to open the dialog', async () => {
+    const wrapper = mount(AppSidebar, { props: { views: [], active: 'dashboard' } })
+    await wrapper.find('button.power-shortcut').trigger('click')
+    expect(wrapper.emitted('power')).toHaveLength(1)
+    expect(wrapper.find('button.power-shortcut svg').exists()).toBe(true)
+  })
+
+  it('PowerDialog loads the permission when opened and confirms before shutting down', async () => {
+    const power = { reboot: { allowed: true, permission: 'yes' }, shutdown: { allowed: true, permission: 'yes' } }
+    const fetch = mockFetch({ '/api/system/status': { power }, '/api/system/power': { action: 'shutdown', delay_s: 1.5 } })
+    const wrapper = mount(PowerDialog, { props: { open: false } })
+    expect(wrapper.find('[role=dialog]').exists()).toBe(false)
+    await wrapper.setProps({ open: true })
+    await flushPromises()
+    const shutdown = wrapper.findAll('.power-actions button')[1]
+    expect(shutdown.attributes('disabled')).toBeUndefined()
+    await shutdown.trigger('click')
+    expect(wrapper.text()).toContain('Shut down the Pi?')
+    await wrapper.find('button.danger').trigger('click')
+    await flushPromises()
+    expect(JSON.parse(fetch.mock.calls.at(-1)[1].body)).toEqual({ action: 'shutdown' })
+    expect(wrapper.text()).toContain('Shutting down.')
+  })
+
+  it('PowerDialog keeps the buttons disabled without the polkit rule', async () => {
+    const power = { reboot: { allowed: false, permission: 'challenge' }, shutdown: { allowed: false, permission: 'challenge' } }
+    mockFetch({ '/api/system/status': { power } })
+    const wrapper = mount(PowerDialog, { props: { open: false } })
+    await wrapper.setProps({ open: true })
+    await flushPromises()
+    expect(wrapper.findAll('.power-actions button').every(button => button.attributes('disabled') !== undefined)).toBe(true)
+    expect(wrapper.text()).toContain('50-banagrade-power.rules')
   })
 })
 

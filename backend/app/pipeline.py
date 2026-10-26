@@ -422,9 +422,16 @@ class PresencePipeline:
             ev = float(self.camera_settings.get("exposure_value", 0.0))
             for attempt in range(5):
                 image, _ = await asyncio.to_thread(self._capture_with_metadata)
-                brightness = await asyncio.to_thread(camera_tuning.bunch_brightness, image)
-                if brightness is None:
+                colour = await asyncio.to_thread(camera_tuning.bunch_colour, image)
+                if colour is None:
                     raise ValueError("No bunch in view: put a fresh green bunch in the middle of the table")
+                brightness, hue = colour
+                if attempt == 0 and hue < camera_tuning.DATASET_MIN_BUNCH_HUE:
+                    raise ValueError(
+                        f"This bunch is riper than the dataset's (hue {hue:.0f}, the dataset's green bunches are "
+                        f"{camera_tuning.DATASET_MIN_BUNCH_HUE:.0f} or more), so its brightness is not comparable; nothing was changed. "
+                        "Use a fresh green bunch."
+                    )
                 if abs(brightness - camera_tuning.DATASET_BUNCH_BRIGHTNESS) <= camera_tuning.BRIGHTNESS_TOLERANCE or attempt == 4:
                     break
                 ev = camera_tuning.next_exposure_value(ev, brightness)

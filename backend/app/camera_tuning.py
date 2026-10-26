@@ -20,6 +20,9 @@ from .alignment import _corners
 
 # Median brightness (HSV value) of the bunch pixels in the 269 dataset Class A and B photos.
 DATASET_BUNCH_BRIGHTNESS = 149.0
+# 10th percentile of the bunch hue in those photos (OpenCV hue, 0-180; green ~35-50, yellow ~25-30). A riper,
+# yellower bunch is naturally brighter or, bruised, darker: market fruit pulled the EV to -1.12 and +1.47.
+DATASET_MIN_BUNCH_HUE = 31.0
 BRIGHTNESS_TOLERANCE = 5.0
 NEUTRAL_TOLERANCE = 0.02  # sheet red/green and blue/green within 2% counts as neutral
 EV_LIMITS = (-3.0, 3.0)
@@ -58,9 +61,10 @@ def colour_cast(sheet_bgr: tuple[float, float, float]) -> float:
     return max(abs(red / green - 1), abs(blue / green - 1))
 
 
-def bunch_brightness(bgr: Any) -> float | None:
-    """Mean brightness (HSV value) of the banana-coloured pixels on a 640 px wide copy, as measured on the dataset."""
+def bunch_colour(bgr: Any) -> tuple[float, float] | None:
+    """(mean brightness, median hue) of the banana-coloured pixels on a 640 px wide copy, as measured on the dataset."""
     import cv2
+    import numpy as np
 
     height, width = bgr.shape[:2]
     small = cv2.resize(bgr, (640, round(height * 640 / width)), interpolation=cv2.INTER_AREA) if width > 640 else bgr
@@ -69,7 +73,12 @@ def bunch_brightness(bgr: Any) -> float | None:
     banana = (hue >= 5) & (hue <= 55) & (saturation >= 25) & (value >= 40)
     if banana.mean() < 0.02:
         return None
-    return float(value[banana].mean())
+    return float(value[banana].mean()), float(np.median(hue[banana]))
+
+
+def bunch_brightness(bgr: Any) -> float | None:
+    colour = bunch_colour(bgr)
+    return colour[0] if colour else None
 
 
 def next_exposure_value(current_ev: float, brightness: float, target: float = DATASET_BUNCH_BRIGHTNESS) -> float:

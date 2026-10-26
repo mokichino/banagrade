@@ -56,7 +56,7 @@ button { cursor: pointer; }
 .brand { display: flex; align-items: center; gap: 10px; padding: 4px 10px 28px; }
 .brand strong { display: block; font-size: 15px; font-weight: 600; }
 .brand span { display: block; margin-top: 3px; color: var(--text-muted); font-size: 11px; letter-spacing: .04em; }
-.brand-mark { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 8px; background: var(--class-a); color: #111827; font-size: 15px; font-weight: 800; }
+.brand-mark { display: block; width: 32px; height: 32px; }
 nav { display: grid; gap: 3px; }
 .nav-button { position: relative; display: flex; align-items: center; width: 100%; min-height: 40px; border: 0; border-radius: var(--radius-sm); padding: 0 12px; background: transparent; color: var(--text-secondary); text-align: left; font-size: 13px; font-weight: 500; transition: background 150ms ease, color 150ms ease; }
 .nav-button:hover { background: var(--surface-hover); color: var(--text); }

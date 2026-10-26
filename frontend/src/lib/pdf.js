@@ -7,7 +7,7 @@ const FILLS = { 'Class A': [255, 241, 196], 'Class B': [219, 234, 254], Rejected
 export function buildScansPdf(scans, { filter = 'All', search = '', generated = new Date() } = {}) {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' })
   doc.setFontSize(15)
-  doc.text('BananaGrade AI Sorting System — Scan Audit Log', 40, 44)
+  doc.text('Banagrade AI Sorting System — Scan Audit Log', 40, 44)
   doc.setFontSize(9)
   doc.setTextColor(90)
   doc.text(`Generated ${formatTimestamp(generated.toISOString())} · ${scans.length} records · Filter: ${filter}${search ? ` · Search: "${search}"` : ''}`, 40, 62)

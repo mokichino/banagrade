@@ -12,8 +12,8 @@ defineEmits(['navigate'])
 <template>
   <aside class="sidebar">
     <div class="brand">
-      <div class="brand-mark" aria-hidden="true">B</div>
-      <div><strong>BananaGrade</strong><span>AI SORTING SYSTEM</span></div>
+      <img class="brand-mark" src="/logo.svg" alt="" width="32" height="32" />
+      <div><strong>Banagrade</strong><span>AI SORTING SYSTEM</span></div>
     </div>
     <nav aria-label="Primary navigation">
       <button v-for="view in views" :key="view.id" :class="['nav-button', { active: active === view.id }]" :aria-current="active === view.id ? 'page' : undefined" @click="$emit('navigate', view.id)">

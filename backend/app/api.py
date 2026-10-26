@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
-from . import demo
+from . import demo, power
 from .drift import drift_report
 from .leds import GRADE_TO_LED, LedState
 from .model_inference import UltralyticsInference
@@ -31,6 +31,10 @@ class SessionRequest(BaseModel):
 class DisputeRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=1000)
     corrected_grade: str | None = Field(default=None, pattern="^(Class A|Class B|Rejected|Technical Failure)$")
+
+
+class PowerRequest(BaseModel):
+    action: str = Field(pattern="^(reboot|shutdown)$")
 
 
 class EventHub:
@@ -53,6 +57,7 @@ storage = Storage(db_path)
 model_inference = UltralyticsInference.from_environment()
 pipeline = PresencePipeline(storage, model_inference)
 events = EventHub()
+power_tasks: set[asyncio.Task[None]] = set()
 
 
 @asynccontextmanager
@@ -103,6 +108,7 @@ async def system_status() -> dict[str, Any]:
         "models": model_inference.status(),
         "websocket_clients": len(events.clients),
         "demo": {"mode": demo_mode(), "data_present": demo.has_demo_data(storage)},
+        "power": await power.status(),
     }
 
 
@@ -154,6 +160,30 @@ async def led_test(step_scale: float = Query(default=1.0, ge=0.0, le=5.0)) -> di
     finally:
         pipeline.leds.set(LedState.ERROR if pipeline.state is PipelineState.ERROR else LedState.READY)
     return {"states": [state.value for state, _ in LED_TEST_STEPS], "hardware": pipeline.leds.hardware_available}
+
+
+@app.post("/api/system/power", status_code=202)
+async def system_power(payload: PowerRequest) -> dict[str, Any]:
+    """Reboot or shut down the Pi. Refused mid-scan, and when polkit has not allowed it (deploy/50-banagrade-power.rules)."""
+    if pipeline.state in pipeline.SNAPSHOT_BUSY or pipeline.state is PipelineState.PRESENCE_DETECTED:
+        raise HTTPException(status_code=409, detail="A scan is in progress; try again when the bunch is removed")
+    answer = await power.permission(payload.action)
+    if answer != "yes":
+        raise HTTPException(status_code=403, detail=f"The service is not allowed to {payload.action} the Pi (logind: {answer}); install deploy/50-banagrade-power.rules")
+    pipeline.leds.set(LedState.BOOTING)
+    await events.publish("system_power", {"action": payload.action})
+
+    async def run() -> None:
+        try:
+            await power.execute(payload.action)
+        except Exception as error:
+            pipeline.leds.set(LedState.ERROR if pipeline.state is PipelineState.ERROR else LedState.READY)
+            await events.publish("system_power_failed", {"action": payload.action, "error": str(error)})
+
+    task = asyncio.create_task(run())
+    power_tasks.add(task)  # the event loop only keeps a weak reference
+    task.add_done_callback(power_tasks.discard)
+    return {"action": payload.action, "delay_s": power.DELAY_S}
 
 
 @app.get("/api/system/telemetry")

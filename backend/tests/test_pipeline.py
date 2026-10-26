@@ -11,7 +11,7 @@ pytest.importorskip("cv2")
 from app.frames import save_frame  # noqa: E402
 from app.leds import LedController, LedState  # noqa: E402
 from app.model_inference import Stage1Prediction, Stage2Prediction  # noqa: E402
-from app.pipeline import OVERLAY_CHECKING, OVERLAY_GRADE, OVERLAY_PROBLEM, OVERLAY_READY, PresencePipeline, PreviewOverlay, draw_overlay  # noqa: E402
+from app.pipeline import OVERLAY_CHECKING, OVERLAY_GRADE, OVERLAY_PROBLEM, OVERLAY_READY, PresencePipeline, PreviewOverlay, distance_check, draw_overlay, focus_distance_cm  # noqa: E402
 from app.storage import Storage  # noqa: E402
 
 
@@ -309,3 +309,12 @@ def test_weak_stage2_box_is_a_technical_failure_not_a_grade(tmp_path) -> None:
     assert scan["error_details"] == "Stage 2 confidence 0.75 is below 0.90"
     assert pipeline.leds.state is LedState.ERROR
     assert pipeline._held_label == "Technical failure"
+
+
+@pytest.mark.parametrize(
+    ("lens_position", "distance", "check"),
+    [(2.222, 45.0, "ok"), (0.818, 122.2, "too_far"), (3.5, 28.6, "too_close"), (0.0, None, None), (None, None, None)],
+)
+def test_focus_distance_flags_a_camera_off_the_rig_height(lens_position, distance, check) -> None:
+    assert focus_distance_cm(lens_position) == distance
+    assert distance_check(focus_distance_cm(lens_position)) == check

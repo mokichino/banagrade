@@ -7,6 +7,7 @@ import HardwareStatusCard from '../components/status/HardwareStatusCard.vue'
 import ModelsCard from '../components/status/ModelsCard.vue'
 import OperationalSummaryCard from '../components/status/OperationalSummaryCard.vue'
 import DriftCard from '../components/status/DriftCard.vue'
+import PowerCard from '../components/status/PowerCard.vue'
 
 defineProps({ led: { type: String, default: 'offline' } })
 const emit = defineEmits(['error'])
@@ -44,5 +45,6 @@ onBeforeUnmount(() => window.clearInterval(timer))
     <HardwareStatusCard :pipeline="status?.pipeline" :models="status?.models" :telemetry="telemetry" />
     <ModelsCard :models="status?.models" />
     <DriftCard :drift="drift" />
+    <PowerCard :power="status?.power" />
   </section>
 </template>

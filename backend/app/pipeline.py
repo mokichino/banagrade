@@ -36,6 +36,10 @@ OVERLAY_PROBLEM = (38, 38, 220)  # red
 OVERLAY_GRADE = {"Class A": (0, 163, 217), "Class B": (235, 99, 37), "Rejected": (38, 38, 220)}
 OVERLAY_FAILURE = (128, 128, 128)
 
+# The width threshold only holds at the thesis rig height (Section 3.6.3), lens to velvet surface.
+RIG_DISTANCE_CM = 45
+DISTANCE_TOLERANCE_CM = 10
+
 
 @dataclass(frozen=True, slots=True)
 class PreviewOverlay:
@@ -61,6 +65,27 @@ def frame_changed(before: Any, after: Any, level: int = 25, fraction: float = 0.
     import numpy as np
 
     return float(np.mean(np.abs(after - before) > level)) > fraction
+
+
+def focus_distance_cm(lens_position: float | None) -> float | None:
+    """Distance the autofocus locked on, from Camera Module 3's LensPosition (dioptres = 1 / metres).
+
+    The lens calibration is approximate, so this is a sanity check on the rig height, not a measurement.
+    0 dioptres is infinity, so it has no distance.
+    """
+    if not lens_position or lens_position <= 0:
+        return None
+    return round(100 / lens_position, 1)
+
+
+def distance_check(distance_cm: float | None) -> str | None:
+    if distance_cm is None:
+        return None
+    if distance_cm > RIG_DISTANCE_CM + DISTANCE_TOLERANCE_CM:
+        return "too_far"
+    if distance_cm < RIG_DISTANCE_CM - DISTANCE_TOLERANCE_CM:
+        return "too_close"
+    return "ok"
 
 
 def draw_overlay(frame: Any, overlay: PreviewOverlay, scale: float) -> Any:
@@ -176,6 +201,7 @@ class PresencePipeline:
 
     async def status(self) -> dict[str, Any]:
         resolution = self.camera_resolution
+        distance = focus_distance_cm(self.lens_position)
         return {
             "available": self.camera_available,
             "enabled": self.enabled,
@@ -197,7 +223,9 @@ class PresencePipeline:
             "camera": {
                 "available": self.camera_available,
                 "resolution": f"{resolution[0]}x{resolution[1]}" if resolution else None,
-                "distance_cm": 45,
+                "expected_distance_cm": RIG_DISTANCE_CM,
+                "focus_distance_cm": distance,
+                "distance_check": distance_check(distance),
                 "autofocus": "locked" if self.lens_position is not None else ("unlocked" if self.camera_available else None),
                 "lens_position_dioptres": self.lens_position,
                 "illumination": self.illumination,

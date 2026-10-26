@@ -6,6 +6,8 @@ import ModelsCard from '../status/ModelsCard.vue'
 import OperationalSummaryCard from '../status/OperationalSummaryCard.vue'
 import HardwareStatusCard from '../status/HardwareStatusCard.vue'
 import DriftCard from '../status/DriftCard.vue'
+import CameraCard from '../status/CameraCard.vue'
+import PowerCard from '../status/PowerCard.vue'
 import DashboardView from '../../views/DashboardView.vue'
 import HistoryView from '../../views/HistoryView.vue'
 import SystemStatusView from '../../views/SystemStatusView.vue'
@@ -79,6 +81,38 @@ describe('status cards with no data', () => {
     expect(loud.find('.drift-summary').text()).toBe('Review disputed frames: low confidence rate.')
     expect(loud.find('.drift-grid strong').text()).toBe('12.5%')
     expect(loud.find('a').attributes('href')).toBe('/api/exports/disputes.zip')
+  })
+})
+
+describe('rig height and power', () => {
+  const camera = extra => ({ camera: { available: false, expected_distance_cm: 45, autofocus: 'locked', lens_position_dioptres: 0.818, ...extra } })
+
+  it('CameraCard warns when autofocus locked far from the rig height', () => {
+    const wrapper = mount(CameraCard, { props: { pipeline: camera({ focus_distance_cm: 122.2, distance_check: 'too_far' }) } })
+    expect(wrapper.text()).toContain('≈ 122 cm · expected 45')
+    expect(wrapper.find('.camera-warning').text()).toContain('farther than the 45 cm rig height')
+    const ok = mount(CameraCard, { props: { pipeline: camera({ focus_distance_cm: 46.1, distance_check: 'ok' }) } })
+    expect(ok.find('.camera-warning').exists()).toBe(false)
+  })
+
+  it('PowerCard disables both buttons until polkit allows them', () => {
+    const power = { reboot: { allowed: false, permission: 'challenge' }, shutdown: { allowed: false, permission: 'challenge' } }
+    const wrapper = mount(PowerCard, { props: { power } })
+    expect(wrapper.findAll('button').every(button => button.attributes('disabled') !== undefined)).toBe(true)
+    expect(wrapper.text()).toContain('50-banagrade-power.rules')
+  })
+
+  it('PowerCard asks before rebooting, then posts the action', async () => {
+    const fetch = mockFetch({ '/api/system/power': { action: 'reboot', delay_s: 1.5 } })
+    const power = { reboot: { allowed: true, permission: 'yes' }, shutdown: { allowed: true, permission: 'yes' } }
+    const wrapper = mount(PowerCard, { props: { power } })
+    await wrapper.findAll('button')[0].trigger('click')
+    expect(fetch).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('Reboot the Pi?')
+    await wrapper.find('button.danger').trigger('click')
+    await flushPromises()
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ action: 'reboot' })
+    expect(wrapper.text()).toContain('Rebooting.')
   })
 })
 

@@ -1,4 +1,5 @@
 import os
+import time
 
 import pytest
 
@@ -122,3 +123,36 @@ def test_csv_export_round_trips_every_stored_value(client) -> None:
     for row in rows:
         assert row == {key: "" if value is None else str(value) for key, value in stored[row["scan_id"]].items()}
     assert next(row for row in rows if row["scan_id"] == "c1")["error_details"] == tricky
+
+
+def fake_logind(monkeypatch, api, answer):
+    calls = []
+
+    async def run(*args):
+        calls.append(args)
+        return (0, f's "{answer}"') if args[0] == "busctl" else (0, "")
+
+    monkeypatch.setattr(api.power, "_run", run)
+    monkeypatch.setattr(api.power, "DELAY_S", 0)
+    return calls
+
+
+def test_power_is_refused_until_polkit_allows_it(client, monkeypatch) -> None:
+    test_client, api = client
+    calls = fake_logind(monkeypatch, api, "challenge")
+    assert test_client.get("/api/system/status").json()["power"]["reboot"] == {"allowed": False, "permission": "challenge"}
+    response = test_client.post("/api/system/power", json={"action": "reboot"})
+    assert response.status_code == 403
+    assert not [call for call in calls if call[0] == "systemctl"]
+
+
+def test_power_runs_systemctl_when_allowed(client, monkeypatch) -> None:
+    test_client, api = client
+    calls = fake_logind(monkeypatch, api, "yes")
+    assert test_client.post("/api/system/power", json={"action": "shutdown"}).status_code == 202
+    for _ in range(50):
+        if ("systemctl", "poweroff", "-i") in calls:
+            break
+        time.sleep(0.01)
+    assert ("systemctl", "poweroff", "-i") in calls
+    assert test_client.post("/api/system/power", json={"action": "halt"}).status_code == 422

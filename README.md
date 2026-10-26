@@ -11,6 +11,7 @@ The system implements the thesis *A Two-Stage Deep Learning System for Cardava B
 - `backend/app/pipeline.py` is the presence-triggered FSM. The capture trigger is the team's trained YOLO11n-presence detector (`models/presence/best.pt`, one class `banana_bunch`, trained on Class A, B and Rejected bunches), run on the low-resolution preview. If it is missing, the Stage 2 detector triggers instead. The preview on System Status draws the trigger's box and status. It captures at 4608×2592 on Camera Module 3, locks autofocus after one cycle at boot, and triggers on a stable in-frame detection held for 400 ms. Each result is persisted to SQLite and pushed over `/ws/live`, and the frame is archived for disputes (`backend/app/frames.py`).
 - `backend/app/drift.py` compares the latest 200 scans with the held-out test set (Stage 1 and Stage 2 confidence, low-confidence and missed-detection rates, dispute rates) and flags drift on the System Status page.
 - `backend/app/leds.py` drives the floor LEDs: green ready, yellow Class A, blue Class B, red Rejected, slow red blink while booting, fast red blink on error. The dashboard mirrors the same state.
+- The System Status page shows the rig height worked out from the autofocus lens position (100 ÷ dioptres) and warns when it is more than 10 cm from 45 cm. The lens calibration is approximate, so it is a check on the mount, not a measurement. The same page can reboot or shut down the Pi (`backend/app/power.py`); the service asks systemd-logind, which allows it only for the `banagrade` user once `deploy/50-banagrade-power.rules` is installed.
 - `backend/app/telemetry.py` reads uptime, CPU temperature, fan state, latency and database health from the device. Unavailable readings are `null`, never estimated.
 - `backend/app/storage.py` owns SQLite, shift sessions, analytics, the rejection trend, and disputes.
 - `frontend/` is a Vue 3 + Chart.js app with three pages: Live Dashboard, Recent Scans and System Status. In production the backend serves its build on the same port.
@@ -137,6 +138,7 @@ sudo cp backend/.env.example /etc/banagrade/banagrade.env
 sudo nano /etc/banagrade/banagrade.env
 sudo chown -R banagrade:banagrade /opt/banagrade /var/lib/banagrade
 sudo cp deploy/banagrade.service deploy/banagrade-backup.service deploy/banagrade-backup.timer /etc/systemd/system/
+sudo cp deploy/50-banagrade-power.rules /etc/polkit-1/rules.d/
 sudo systemctl daemon-reload && sudo systemctl enable --now banagrade banagrade-backup.timer
 ```
 

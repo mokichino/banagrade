@@ -344,15 +344,19 @@ class PresencePipeline:
                 self._latest_jpeg_at = now
         return cv2.resize(frame, self.DETECTION_SIZE, interpolation=cv2.INTER_AREA)
 
-    async def snapshot_jpeg(self) -> bytes:
-        """One full-resolution frame for the operator; refused while a scan is using the sensor."""
+    async def snapshot_array(self) -> Any:
+        """One full-resolution BGR frame for the operator; refused while a scan is using the sensor."""
         if self._camera is None:
             raise RuntimeError("Camera unavailable")
         if self.state in self.SNAPSHOT_BUSY:
             raise RuntimeError("A scan is in progress")
+        return await asyncio.to_thread(self._camera.capture_array, "main")
+
+    async def snapshot_jpeg(self) -> bytes:
+        """One full-resolution frame for the operator; refused while a scan is using the sensor."""
         import cv2
 
-        image = await asyncio.to_thread(self._camera.capture_array, "main")
+        image = await self.snapshot_array()
         ok, encoded = await asyncio.to_thread(cv2.imencode, ".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 90])
         if not ok:
             raise RuntimeError("Snapshot encoding failed")

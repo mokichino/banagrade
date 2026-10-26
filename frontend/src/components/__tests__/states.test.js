@@ -107,6 +107,22 @@ describe('lens focus and power', () => {
     expect(wrapper.find('.camera-preview').classes()).not.toContain('expanded')
   })
 
+  it('CameraCard checks the camera alignment from a sheet and outlines it', async () => {
+    const tilted = { corners: [[1100, 650], [3095, 650], [3250, 2229], [948, 2291]], front_back_ratio: 1.154, side_ratio: 0.962, front_back_tilt_deg: 17.9, side_tilt_deg: -3.7, height_cm: 46.3, level: false, height_ok: true }
+    const fetch = mockFetch({ '/api/camera/alignment': tilted })
+    const wrapper = mount(CameraCard, { props: { pipeline: camera({ focus: 'fixed', lens_position_dioptres: 0.99 }) } })
+    await wrapper.findAll('.camera-actions button').find(b => b.text() === 'Check camera alignment').trigger('click')
+    await flushPromises()
+    expect(fetch.mock.calls[0][1].method).toBe('POST')
+    const text = wrapper.find('.alignment-result').text()
+    expect(text).toContain('17.9° towards the top of the view · tip the lens towards the bottom')
+    expect(text).toContain('3.7° towards the right of the view · tip the lens towards the left')
+    expect(text).toContain('≈ 46 cm')
+    expect(wrapper.find('polygon.guide-sheet.tilted').attributes('points')).toBe('1100,650 3095,650 3250,2229 948,2291')
+    await wrapper.find('.alignment-result .text-button').trigger('click')
+    expect(wrapper.find('polygon.guide-sheet').exists()).toBe(false)
+  })
+
   it('PowerCard disables both buttons until polkit allows them', () => {
     const power = { reboot: { allowed: false, permission: 'challenge' }, shutdown: { allowed: false, permission: 'challenge' } }
     const wrapper = mount(PowerCard, { props: { power } })

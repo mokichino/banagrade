@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import AppHeader from './components/layout/AppHeader.vue'
 import AppSidebar from './components/layout/AppSidebar.vue'
 import DisputeModal from './components/DisputeModal.vue'
+import PowerDialog from './components/PowerDialog.vue'
 import ScanDrawer from './components/ScanDrawer.vue'
 import { request } from './composables/useApi.js'
 import { useLive } from './composables/useLive.js'
@@ -22,6 +23,7 @@ const error = ref('')
 const refreshKey = ref(0)
 const selectedScan = ref(null)
 const disputeScan = ref(null)
+const powerOpen = ref(false)
 
 const demo = ref({ mode: false, data_present: false })
 async function loadDemoFlag() {
@@ -49,7 +51,7 @@ function onDisputeSaved() {
 
 <template>
   <div class="app-shell">
-    <AppSidebar :views="views" :active="activeView" :led="led" @navigate="navigate" />
+    <AppSidebar :views="views" :active="activeView" :led="led" @navigate="navigate" @power="powerOpen = true" />
     <main class="main-content">
       <AppHeader :title="current.label" :subtitle="current.subtitle" :led="led" :connection="connection" :demo="demo.data_present || demo.mode" />
       <div v-if="error" class="alert" role="alert"><span>{{ error }}</span><button class="text-button" aria-label="Dismiss" @click="error = ''">Dismiss</button></div>
@@ -59,5 +61,6 @@ function onDisputeSaved() {
     </main>
     <ScanDrawer :scan="selectedScan" @close="selectedScan = null" />
     <DisputeModal :scan="disputeScan" @close="disputeScan = null" @saved="onDisputeSaved" @error="error = $event" />
+    <PowerDialog :open="powerOpen" @close="powerOpen = false" />
   </div>
 </template>

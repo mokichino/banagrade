@@ -10,7 +10,12 @@ Group=banagrade
 SupplementaryGroups=video gpio
 WorkingDirectory=/opt/banagrade/backend
 EnvironmentFile=-/etc/banagrade/banagrade.env
-ExecStart=/opt/banagrade/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
+# The camera preview is an endless MJPEG response, so an open System Status tab kept uvicorn
+# "waiting for connections to close" until systemd killed it 90 s later, without releasing the
+# camera or LEDs. After 5 s uvicorn cancels open responses and runs the app's shutdown.
+ExecStart=/opt/banagrade/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 5
+# Backstop in case closing the camera itself hangs.
+TimeoutStopSec=20
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true

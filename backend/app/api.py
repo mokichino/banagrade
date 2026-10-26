@@ -241,6 +241,37 @@ async def camera_alignment() -> dict[str, Any]:
     return result
 
 
+async def _calibration(run: Any) -> dict[str, Any]:
+    if not pipeline.camera_available:
+        raise HTTPException(status_code=503, detail="Camera unavailable")
+    try:
+        return await run()
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/api/camera/white-balance")
+async def camera_white_balance() -> dict[str, Any]:
+    """Lock white balance so the white sheet in view is neutral, as the dataset's backdrop is."""
+    return await _calibration(pipeline.calibrate_white_balance)
+
+
+@app.post("/api/camera/brightness")
+async def camera_brightness() -> dict[str, Any]:
+    """Set exposure compensation so the bunch in view is as bright as the dataset's bunches."""
+    return await _calibration(pipeline.calibrate_brightness)
+
+
+@app.delete("/api/camera/{setting}", status_code=204)
+async def camera_reset(setting: str) -> None:
+    """Back to automatic white balance, or exposure compensation 0."""
+    if setting not in {"white-balance", "brightness"}:
+        raise HTTPException(status_code=404, detail="Unknown camera setting")
+    await pipeline.reset_camera_setting(setting.replace("-", "_"))
+
+
 @app.get("/api/inspection/scans")
 def list_scans(limit: int = Query(50, ge=1, le=5000), offset: int = Query(0, ge=0)) -> dict[str, Any]:
     return {"items": storage.list_scans(limit, offset), "limit": limit, "offset": offset}

@@ -123,6 +123,20 @@ describe('lens focus and power', () => {
     expect(wrapper.find('polygon.guide-sheet').exists()).toBe(false)
   })
 
+  it('CameraCard locks white balance from a sheet and shows the saved settings', async () => {
+    const fetch = mockFetch({ '/api/camera/white-balance': { colour_gains: [1.19, 0.88], sheet_bgr: [190, 190, 190], cast: 0.004, neutral: true } })
+    const wrapper = mount(CameraCard, { props: { pipeline: camera({ white_balance: { mode: 'auto' }, brightness: { exposure_value: 0, set_at: null, dataset_bunch_brightness: 149 } }) } })
+    expect(wrapper.text()).toContain('Automatic (drifts)')
+    expect(wrapper.text()).toContain('Automatic (EV 0)')
+    await wrapper.findAll('.tuning-actions button').find(b => b.text() === 'Set white balance from sheet').trigger('click')
+    await flushPromises()
+    expect(fetch.mock.calls[0][0]).toContain('/api/camera/white-balance')
+    expect(wrapper.text()).toContain('White balance locked: the sheet is neutral (within 0.4%)')
+    const locked = mount(CameraCard, { props: { pipeline: camera({ white_balance: { mode: 'locked', colour_gains: [1.19, 0.88] }, brightness: { exposure_value: -0.6, bunch_brightness: 150.2, dataset_bunch_brightness: 149, set_at: 'now' } }) } })
+    expect(locked.text()).toContain('Locked to sheet · R 1.19 B 0.88')
+    expect(locked.text()).toContain('EV -0.6 · bunch 150.2 vs dataset 149')
+  })
+
   it('PowerCard disables both buttons until polkit allows them', () => {
     const power = { reboot: { allowed: false, permission: 'challenge' }, shutdown: { allowed: false, permission: 'challenge' } }
     const wrapper = mount(PowerCard, { props: { power } })

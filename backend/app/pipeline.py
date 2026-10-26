@@ -20,6 +20,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from . import camera_tuning
 from .frames import save_frame
 from .grading import REFERENCE_RESOLUTION, Stage1Result, decide_grade, scale_width_to_reference, width_threshold_px
 from .leds import LedController, LedState
@@ -160,6 +161,10 @@ class PresencePipeline:
         self.min_banana_share = float(os.getenv("BANAGRADE_MIN_BANANA_SHARE", "0.10"))
         # Dioptres to hold the lens at, or "auto" for one autofocus cycle at boot.
         self.lens_setting = os.getenv("BANAGRADE_LENS_POSITION", RIG_LENS_POSITION).strip().lower()
+        # White balance and exposure calibrated to match the dataset (camera_tuning.py), reapplied at every start.
+        self.camera_settings_path = Path(os.getenv("BANAGRADE_CAMERA_SETTINGS", storage.path.parent / "camera.json"))
+        self.camera_settings = camera_tuning.load_settings(self.camera_settings_path)
+        self._calibrating = False
         self.leds = leds or LedController(on_change=self._on_led_change)
         self.state = PipelineState.BOOTING
         self.last_error: str | None = None
@@ -222,6 +227,17 @@ class PresencePipeline:
                 "focus": self.focus_mode if self.lens_position is not None else ("unset" if self.camera_available else None),
                 "lens_position_dioptres": self.lens_position,
                 "illumination": self.illumination,
+                "white_balance": (
+                    {"mode": "locked", "colour_gains": self.camera_settings["colour_gains"], "set_at": self.camera_settings.get("white_balance_set_at")}
+                    if self.camera_settings.get("colour_gains")
+                    else {"mode": "auto"}
+                ),
+                "brightness": {
+                    "exposure_value": self.camera_settings.get("exposure_value", 0.0),
+                    "bunch_brightness": self.camera_settings.get("bunch_brightness"),
+                    "dataset_bunch_brightness": camera_tuning.DATASET_BUNCH_BRIGHTNESS,
+                    "set_at": self.camera_settings.get("brightness_set_at"),
+                },
             },
         }
 
@@ -292,6 +308,13 @@ class PresencePipeline:
         self._camera = camera
         self.camera_resolution = (width, height)
         self._lock_focus()
+        self._apply_camera_settings()
+
+    def _apply_camera_settings(self) -> None:
+        try:
+            self._camera.set_controls(camera_tuning.controls_for(self.camera_settings))
+        except Exception as error:  # a bad saved setting must not stop grading
+            self.last_error = f"Camera colour/brightness settings not applied: {error}"
 
     def _lock_focus(self) -> None:
         """Hold the lens at BANAGRADE_LENS_POSITION, or run one autofocus cycle and hold that (Section 3.6.3)."""
@@ -344,6 +367,82 @@ class PresencePipeline:
                 self._latest_jpeg = encoded.tobytes()
                 self._latest_jpeg_at = now
         return cv2.resize(frame, self.DETECTION_SIZE, interpolation=cv2.INTER_AREA)
+
+    def _capture_with_metadata(self) -> tuple[Any, dict[str, Any]]:
+        request = self._camera.capture_request()
+        try:
+            return request.make_array("main"), request.get_metadata()
+        finally:
+            request.release()
+
+    async def _calibrate(self, measure: Any) -> dict[str, Any]:
+        """Run a calibration with scanning paused; whatever is on the table afterwards is held, not scanned."""
+        if self._camera is None:
+            raise RuntimeError("Camera unavailable")
+        if self.state in self.SNAPSHOT_BUSY or self._calibrating:
+            raise RuntimeError("A scan or another calibration is in progress")
+        self._calibrating = True
+        try:
+            result = await measure()
+        finally:
+            self._calibrating = False
+            self._hold, self._empty_since = True, None
+            self._held_label, self._held_color = "Calibration · remove it to scan", OVERLAY_FAILURE
+        camera_tuning.save_settings(self.camera_settings_path, self.camera_settings)
+        return result
+
+    async def calibrate_white_balance(self) -> dict[str, Any]:
+        """Fixed colour gains that make a white sheet in view neutral, refined until within 2%."""
+
+        async def measure() -> dict[str, Any]:
+            applied = None
+            for attempt in range(4):
+                image, metadata = await asyncio.to_thread(self._capture_with_metadata)
+                sheet = await asyncio.to_thread(camera_tuning.sheet_colour, image)
+                if sheet is None:
+                    raise ValueError("No whole sheet found: lay a white sheet flat in the middle, fully in view")
+                cast = camera_tuning.colour_cast(sheet)
+                current = tuple(metadata.get("ColourGains") or applied or (1.0, 1.0))
+                if cast <= camera_tuning.NEUTRAL_TOLERANCE or attempt == 3:
+                    applied = applied or current
+                    break
+                applied = camera_tuning.neutral_gains(sheet, current)
+                await asyncio.to_thread(self._camera.set_controls, {"AwbEnable": False, "ColourGains": applied})
+                await asyncio.sleep(1.0)  # a few frames for the new gains
+            self.camera_settings.update(colour_gains=list(applied), white_balance_set_at=now_iso())
+            return {"colour_gains": list(applied), "sheet_bgr": [round(value, 1) for value in sheet], "cast": round(cast, 3), "neutral": cast <= camera_tuning.NEUTRAL_TOLERANCE}
+
+        return await self._calibrate(measure)
+
+    async def calibrate_brightness(self) -> dict[str, Any]:
+        """Exposure compensation that makes the bunch in view as bright as the dataset's, refined until within 5."""
+
+        async def measure() -> dict[str, Any]:
+            ev = float(self.camera_settings.get("exposure_value", 0.0))
+            for attempt in range(5):
+                image, _ = await asyncio.to_thread(self._capture_with_metadata)
+                brightness = await asyncio.to_thread(camera_tuning.bunch_brightness, image)
+                if brightness is None:
+                    raise ValueError("No bunch in view: put a fresh green bunch in the middle of the table")
+                if abs(brightness - camera_tuning.DATASET_BUNCH_BRIGHTNESS) <= camera_tuning.BRIGHTNESS_TOLERANCE or attempt == 4:
+                    break
+                ev = camera_tuning.next_exposure_value(ev, brightness)
+                await asyncio.to_thread(self._camera.set_controls, {"ExposureValue": ev})
+                await asyncio.sleep(1.5)  # automatic exposure settles over several frames
+            self.camera_settings.update(exposure_value=ev, bunch_brightness=round(brightness, 1), brightness_set_at=now_iso())
+            matched = abs(brightness - camera_tuning.DATASET_BUNCH_BRIGHTNESS) <= camera_tuning.BRIGHTNESS_TOLERANCE
+            return {"exposure_value": ev, "bunch_brightness": round(brightness, 1), "dataset_bunch_brightness": camera_tuning.DATASET_BUNCH_BRIGHTNESS, "matched": matched}
+
+        return await self._calibrate(measure)
+
+    async def reset_camera_setting(self, setting: str) -> None:
+        """Back to automatic white balance ("white_balance") or EV 0 ("brightness")."""
+        keys = {"white_balance": ("colour_gains", "white_balance_set_at"), "brightness": ("exposure_value", "bunch_brightness", "brightness_set_at")}[setting]
+        for key in keys:
+            self.camera_settings.pop(key, None)
+        camera_tuning.save_settings(self.camera_settings_path, self.camera_settings)
+        if self._camera is not None:
+            await asyncio.to_thread(self._apply_camera_settings)
 
     async def snapshot_array(self) -> Any:
         """One full-resolution BGR frame for the operator; refused while a scan is using the sensor."""
@@ -408,6 +507,10 @@ class PresencePipeline:
                 continue
             box, confidence, source = detection
             self._empty_since = None
+            if self._calibrating:
+                self._show(box, "Calibrating the camera", OVERLAY_FAILURE)
+                await asyncio.sleep(self.presence_interval_s)
+                continue
             if self._hold:  # result shown until the bunch is removed
                 self._show(box, self._held_label, self._held_color)
                 await asyncio.sleep(self.presence_interval_s)

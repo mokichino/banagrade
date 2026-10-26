@@ -23,7 +23,7 @@ from typing import Any
 from .frames import save_frame
 from .grading import REFERENCE_RESOLUTION, Stage1Result, decide_grade, scale_width_to_reference, width_threshold_px
 from .leds import LedController, LedState
-from .model_inference import PresenceHit
+from .model_inference import HAND_CONFIDENCE, PresenceHit
 from .preprocessing import MaskSettings, colour_share, frame_health, stage1_input
 from .storage import Storage, now_iso
 
@@ -174,7 +174,7 @@ class PresencePipeline:
         self._task: asyncio.Task[None] | None = None
         self._camera: Any = None
         self._hold = False
-        self._not_a_bunch = False  # the trigger's box is on something colourless, e.g. paper
+        self._ignored_label: str | None = None  # the trigger's box is on something that is not a bunch, e.g. paper
         self._empty_since: float | None = None  # while holding: when the bunch went missing from the checks
         self._latest_jpeg: bytes | None = None
         self._latest_jpeg_at = 0.0
@@ -260,10 +260,10 @@ class PresencePipeline:
             try:
                 await self._set_state(PipelineState.BOOTING)
                 self.leds.set(LedState.BOOTING)
+                self.last_error = None  # cleared before opening the camera, so a lens focus error stays visible
                 await asyncio.to_thread(self._open_camera)
                 if not self.inference.available:
                     raise RuntimeError(self.inference.error or "Stage 1 / Stage 2 models are not loaded")
-                self.last_error = None
                 await self._run()
             except asyncio.CancelledError:
                 raise
@@ -386,7 +386,7 @@ class PresencePipeline:
             detection = await self._presence_check(frame)
             if detection is None:
                 self._overlay = None
-                self._not_a_bunch = False
+                self._ignored_label = None
                 if self._hold:
                     now = time.monotonic()
                     if self._empty_since is None:
@@ -408,9 +408,10 @@ class PresencePipeline:
                 await asyncio.sleep(self.presence_interval_s)
                 continue
             # The trigger was trained on bunches only and also boxes paper; show those, never capture them.
-            self._not_a_bunch = colour_share(frame) < self.min_colour_share
-            if self._not_a_bunch:
-                self._show(box, NOT_A_BUNCH_LABEL, OVERLAY_FAILURE)
+            if self._ignored_label is None and colour_share(frame) < self.min_colour_share:
+                self._ignored_label = NOT_A_BUNCH_LABEL
+            if self._ignored_label:
+                self._show(box, self._ignored_label, OVERLAY_FAILURE)
                 if self.state is not PipelineState.IDLE:
                     await self._set_state(PipelineState.IDLE)
                     self.leds.set(LedState.READY)
@@ -431,15 +432,13 @@ class PresencePipeline:
         """
         signature = change_signature(frame)
         now = time.monotonic()
-        steady = self._last_detection is None or self._hold or self._not_a_bunch
-        if (
-            steady
-            and self._reference is not None
-            and now - self._last_model_check < self.FORCED_CHECK_S
-            and not frame_changed(self._reference, signature)
-        ):
+        changed = self._reference is None or frame_changed(self._reference, signature)
+        steady = self._last_detection is None or self._hold or self._ignored_label is not None
+        if steady and not changed and now - self._last_model_check < self.FORCED_CHECK_S:
             self.trigger_stats["skipped_unchanged"] += 1
             return self._last_detection
+        if changed:  # something moved on the table, so an ignored object gets a fresh look
+            self._ignored_label = None
         detection = await asyncio.to_thread(self.inference.detect_presence, frame, self.PRESENCE_CONFIDENCE)
         self.trigger_stats["model_checks"] += 1
         self._reference, self._last_detection, self._last_model_check = signature, detection, now
@@ -463,6 +462,16 @@ class PresencePipeline:
             return False
         if max(abs(a - b) for a, b in zip(first, current)) > max(width, height) * 0.03:
             self._show(current, f"Bunch {confidence:.2f} ({source}) · moving, hold still", OVERLAY_CHECKING)
+            return False
+        # Stage 1 judges the whole frame, so a hand in view can sway it; other COCO objects are not bunches.
+        objects = await asyncio.to_thread(self.inference.check_objects, second, current)
+        if objects.hand >= HAND_CONFIDENCE:
+            self._show(current, f"Hand in view ({objects.hand:.2f}) · let go to scan", OVERLAY_CHECKING)
+            return False
+        if objects.other:
+            name, score = objects.other
+            self._ignored_label = f"Not a bunch · looks like a {name} ({score:.2f})"
+            self._show(current, self._ignored_label, OVERLAY_FAILURE)
             return False
         self._show(current, f"Bunch {confidence:.2f} ({source}) · scanning", OVERLAY_READY)
         return True

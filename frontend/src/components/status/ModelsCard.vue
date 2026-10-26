@@ -4,8 +4,8 @@ import { computed } from 'vue'
 const props = defineProps({ models: { type: Object, default: null } })
 const STATE_LABEL = { loaded: 'Loaded', missing: 'Missing', error: 'Error' }
 const entries = computed(() => props.models?.models || [])
-const STAGE = { stage1: 'Stage 1', stage2: 'Stage 2', presence: 'Capture trigger' }
-const INPUT = { stage1: 'Raw RGB, whole frame resized to 224 × 224', stage2: 'Raw RGB, 640 × 640 letterbox', presence: '640 × 360 preview, 640 letterbox' }
+const STAGE = { stage1: 'Stage 1', stage2: 'Stage 2', presence: 'Capture trigger', objects: 'Before capture' }
+const INPUT = { stage1: 'Raw RGB, whole frame resized to 224 × 224', stage2: 'Raw RGB, 640 × 640 letterbox', presence: '640 × 360 preview, 640 letterbox', objects: '640 × 360 preview, 640 letterbox' }
 </script>
 
 <template>

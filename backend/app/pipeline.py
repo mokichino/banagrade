@@ -36,6 +36,7 @@ OVERLAY_PROBLEM = (38, 38, 220)  # red
 OVERLAY_GRADE = {"Class A": (0, 163, 217), "Class B": (235, 99, 37), "Rejected": (38, 38, 220)}
 OVERLAY_FAILURE = (128, 128, 128)
 NOT_A_BUNCH_LABEL = "Not a bunch · no banana colour"
+STARTUP_HOLD_LABEL = "On the table at startup · remove it to scan"
 
 # The width threshold only holds at the thesis rig height (Section 3.6.3), lens to velvet surface.
 RIG_DISTANCE_CM = 45
@@ -146,7 +147,7 @@ class PresencePipeline:
         self.presence_interval_s = float(os.getenv("BANAGRADE_PRESENCE_INTERVAL_S", "0.25"))
         # A graded bunch is held until the table has looked empty this long without a break. One missed check
         # used to end the hold, so a hand straightening the bunch, or lifting it to turn it, started a new scan.
-        self.release_s = float(os.getenv("BANAGRADE_RELEASE_S", "1.5"))
+        self.release_s = float(os.getenv("BANAGRADE_RELEASE_S", "3"))
         self.mask_settings = MaskSettings.from_environment()
         # The trained Stage 1 model saw raw frames; masking dropped held-out accuracy from 0.996 to 0.911.
         # Only enable this for a model retrained on HSV-masked images.
@@ -360,6 +361,10 @@ class PresencePipeline:
     async def _run(self) -> None:
         await self._set_state(PipelineState.IDLE)
         self.leds.set(LedState.READY)
+        # Start held: a bunch already on the table was probably graded before a restart, so it is only
+        # scanned once the table has been cleared. An empty table is released after release_s as usual.
+        self._hold = True
+        self._held_label, self._held_color = STARTUP_HOLD_LABEL, OVERLAY_FAILURE
         while True:
             frame = await self._capture_lores()
             health = frame_health(frame)

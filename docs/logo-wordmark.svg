@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 284 64">
+  <style>
+    .word { font: 700 34px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; letter-spacing: -0.5px; }
+    .ink { fill: #111827; }
+    @media (prefers-color-scheme: dark) { .ink { fill: #f9fafb; } }
+  </style>
+  <rect width="64" height="64" rx="14" fill="#111827"/>
+  <path fill="none" stroke="#f5c518" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" d="M10 20v-8a2 2 0 0 1 2-2h8M44 10h8a2 2 0 0 1 2 2v8M54 44v8a2 2 0 0 1-2 2h-8M20 54h-8a2 2 0 0 1-2-2v-8"/>
+  <g transform="translate(-3.5 -2.5) rotate(-32 32 33)">
+    <path fill="#f5c518" stroke="#f5c518" stroke-width="2.2" stroke-linejoin="round" d="M14 29C17.5 44 45 47 50.5 31.5 42 31 22 31 14 29z"/>
+    <path fill="#f5c518" d="M47.6 31.4l2.2-6.8a1.6 1.6 0 0 1 3 1l-1.8 6.4z"/>
+    <path fill="none" stroke="#111827" stroke-width="1.5" stroke-linecap="round" d="M18.5 32.8C24.5 38.4 38 39.8 45.8 34.6"/>
+  </g>
+  <text class="word" x="80" y="44"><tspan class="ink">bana</tspan><tspan fill="#d9a300">grade</tspan></text>
+</svg>

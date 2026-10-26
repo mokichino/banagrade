@@ -1,5 +1,5 @@
 <script setup>
-import { confidencePercent, failureReason, finalGradeKey, finalGradeLabel, formatConfidence, formatTimestamp, isHealthy, scanLabel, stage1Label, stage2Label } from '../lib/grades.js'
+import { confidencePercent, disputeSummary, failureReason, finalGradeKey, finalGradeLabel, formatConfidence, formatTimestamp, isHealthy, scanLabel, stage1Label, stage2Label } from '../lib/grades.js'
 
 defineProps({ scans: { type: Array, required: true } })
 defineEmits(['select', 'dispute'])
@@ -26,8 +26,21 @@ defineEmits(['select', 'dispute'])
               <small class="tabular">{{ formatConfidence(scan.stage1_confidence) }}</small>
             </div>
           </td>
-          <td><span :class="['grade-chip', finalGradeKey(scan)]">{{ finalGradeLabel(scan) }}</span><small v-if="finalGradeKey(scan) === 't' && failureReason(scan)" class="failure-reason">{{ failureReason(scan) }}</small></td>
-          <td><button class="text-button dispute-button" @click="$emit('dispute', scan)">Dispute</button></td>
+          <td>
+            <div class="grade-cell">
+              <span :class="['grade-chip', finalGradeKey(scan)]">{{ finalGradeLabel(scan) }}</span>
+              <span v-if="scan.disputed" class="disputed-badge" :title="disputeSummary(scan)">
+                <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" /><path d="M4 22v-7" fill="none" /></svg>
+                Disputed
+              </span>
+            </div>
+            <small v-if="finalGradeKey(scan) === 't' && failureReason(scan)" class="failure-reason">{{ failureReason(scan) }}</small>
+          </td>
+          <td>
+            <button class="icon-button dispute-button" :title="scan.disputed ? 'Disputes for this scan' : 'Dispute grade'" :aria-label="`Dispute ${scanLabel(scan.scan_id)}`" @click="$emit('dispute', scan)">
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" /><path d="M4 22v-7" /></svg>
+            </button>
+          </td>
         </tr>
         <tr v-if="!scans.length"><td colspan="7" class="empty">No scan records match.</td></tr>
       </tbody>

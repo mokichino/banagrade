@@ -108,6 +108,12 @@ def test_dispute_export_zip(client, tmp_path, monkeypatch) -> None:
     with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
         assert sorted(archive.namelist()) == ["frames/Class_B/z1_f.jpg", "labels.csv"]
 
+    [listed] = test_client.get("/api/inspection/scans/z1/disputes").json()["items"]
+    assert listed["id"] == dispute["id"]
+    deleted = test_client.delete(f"/api/inspection/scans/z1/disputes/{dispute['id']}")
+    assert deleted.json()["final_grade"] == "Class A"
+    assert test_client.delete(f"/api/inspection/scans/z1/disputes/{dispute['id']}").status_code == 404
+
 
 def test_csv_export_round_trips_every_stored_value(client) -> None:
     import csv

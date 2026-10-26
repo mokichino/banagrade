@@ -9,7 +9,7 @@ export const GRADES = {
   Rejected: { key: 'r', label: 'Rejected', description: 'Unhealthy at Stage 1' }
 }
 
-export const GRADE_FILTERS = ['All', 'Class A', 'Class B', 'Rejected']
+export const GRADE_FILTERS = ['All', 'Class A', 'Class B', 'Rejected', 'Technical failure', 'Disputed']
 
 export function scanLabel(scanId) {
   if (!scanId) return '—'
@@ -45,6 +45,13 @@ export function failureReason(scan) {
     default:
       return scan.error_details || ''
   }
+}
+
+/** Hover text for the Disputed badge: what the model said and the latest reason. */
+export function disputeSummary(scan) {
+  if (!scan?.disputed) return ''
+  const model = scan.model_grade ? `Model graded ${scan.model_grade === 'Technical Failure' ? 'Technical failure' : scan.model_grade}` : 'Disputed'
+  return scan.dispute_reason ? `${model} · ${scan.dispute_reason}` : model
 }
 
 export function finalGradeKey(scan) {
@@ -90,6 +97,8 @@ export function matchesSearch(scan, query) {
 }
 
 export function matchesGrade(scan, filter) {
+  if (filter === 'Technical failure') return isTechnicalFailure(scan)
+  if (filter === 'Disputed') return Boolean(scan.disputed)
   return filter === 'All' || scan.final_grade === filter
 }
 

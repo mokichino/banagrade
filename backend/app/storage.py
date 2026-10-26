@@ -159,6 +159,41 @@ class Storage:
                 connection.execute("UPDATE scans SET final_grade = ? WHERE scan_id = ?", (stored_grade, scan_id))
         return {"id": dispute_id, "scan_id": scan_id, "reason": reason, "corrected_grade": corrected_grade, "original_grade": original_grade, "archived_frames": archived}
 
+    def scan_disputes(self, scan_id: str) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT id, reason, corrected_grade, original_grade, created_at FROM scan_disputes WHERE scan_id = ? ORDER BY created_at DESC, rowid DESC",
+                (scan_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def delete_dispute(self, scan_id: str, dispute_id: str) -> dict[str, Any]:
+        """Remove one dispute and put the grade back to the latest remaining correction, or to the model's grade."""
+        with self.connect() as connection:
+            dispute = connection.execute("SELECT * FROM scan_disputes WHERE id = ? AND scan_id = ?", (dispute_id, scan_id)).fetchone()
+            if dispute is None:
+                raise KeyError(dispute_id)
+            model = connection.execute(
+                "SELECT original_grade FROM scan_disputes WHERE scan_id = ? AND original_grade IS NOT NULL ORDER BY created_at, rowid LIMIT 1",
+                (scan_id,),
+            ).fetchone()
+            connection.execute("DELETE FROM scan_disputes WHERE id = ?", (dispute_id,))
+            latest = connection.execute(
+                "SELECT corrected_grade FROM scan_disputes WHERE scan_id = ? AND corrected_grade IS NOT NULL ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                (scan_id,),
+            ).fetchone()
+            remaining = connection.execute("SELECT COUNT(*) FROM scan_disputes WHERE scan_id = ?", (scan_id,)).fetchone()[0]
+            # Disputes saved before original_grade existed have no model grade; leave final_grade alone then.
+            grade = latest["corrected_grade"] if latest else model["original_grade"] if model else None
+            if grade:
+                connection.execute("UPDATE scans SET final_grade = ? WHERE scan_id = ?", (None if grade == "Technical Failure" else grade, scan_id))
+            final_grade = connection.execute("SELECT final_grade FROM scans WHERE scan_id = ?", (scan_id,)).fetchone()["final_grade"]
+        # Every dispute of a scan archives to the same file names, so keep them while another dispute remains.
+        if not remaining:
+            for frame in json.loads(dispute["archived_frames"] or "[]"):
+                Path(frame).unlink(missing_ok=True)
+        return {"id": dispute_id, "scan_id": scan_id, "final_grade": final_grade, "remaining_disputes": remaining}
+
     def disputed_scans(self) -> list[dict[str, Any]]:
         """One row per disputed scan: the model's grade, the latest operator correction, and archived frames."""
         with self.connect() as connection:
@@ -232,7 +267,13 @@ class Storage:
     def list_scans(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         with self.connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM scans ORDER BY captured_at DESC LIMIT ? OFFSET ?", (limit, offset)
+                """
+                SELECT s.*, EXISTS (SELECT 1 FROM scan_disputes d WHERE d.scan_id = s.scan_id) AS disputed,
+                       (SELECT original_grade FROM scan_disputes d WHERE d.scan_id = s.scan_id AND original_grade IS NOT NULL ORDER BY created_at, rowid LIMIT 1) AS model_grade,
+                       (SELECT reason FROM scan_disputes d WHERE d.scan_id = s.scan_id ORDER BY created_at DESC, rowid DESC LIMIT 1) AS dispute_reason
+                FROM scans s ORDER BY s.captured_at DESC LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
             ).fetchall()
         return [dict(row) for row in rows]
 

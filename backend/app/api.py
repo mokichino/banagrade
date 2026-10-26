@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
 from . import demo, power
+from .alignment import measure_sheet
 from .drift import drift_report
 from .leds import GRADE_TO_LED, LedState
 from .model_inference import UltralyticsInference
@@ -223,6 +224,21 @@ async def camera_snapshot() -> Response:
     except RuntimeError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/camera/alignment")
+async def camera_alignment() -> dict[str, Any]:
+    """Tilt and height from a short bond sheet lying flat in the middle of the view."""
+    if not pipeline.camera_available:
+        raise HTTPException(status_code=503, detail="Camera unavailable")
+    try:
+        image = await pipeline.snapshot_array()
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    result = await asyncio.to_thread(measure_sheet, image)
+    if result is None:
+        raise HTTPException(status_code=422, detail="No whole sheet found: lay a short bond sheet flat in the middle, fully in view")
+    return result
 
 
 @app.get("/api/inspection/scans")

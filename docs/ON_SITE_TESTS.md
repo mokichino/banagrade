@@ -24,9 +24,13 @@ Run commands from a laptop on the same Wi-Fi, or over SSH on the Pi. `PI` below 
    there instead of autofocusing at boot, because autofocus on the bare velvet locked anywhere from 0.69 to
    1.31 dpt. 0.99 is what this camera read with a printed target at a tape-measured 45 cm (0.983, 0.989,
    1.012 on 2026-10-26). Its lens positions do not follow 1 ÷ metres, so do not expect 2.2.
-5. Take a **Full-resolution snapshot** with a sheet of short bond paper (27.9 × 21.6 cm) on the velvet. At
-   45 cm the whole sheet fits with velvet on every side, about 2320 × 1760 px. If it runs off the frame the
-   camera is too low; if it is much smaller it is too high. After replacing the camera or its mount, find the
+5. Lay a short bond sheet (27.9 × 21.6 cm) flat in the middle of the velvet and press **Check camera
+   alignment** on the camera card. It outlines the sheet and reports the front–back and side tilt from the
+   lengths of its opposite edges, and the height at the sheet (approximate, from the camera's published field
+   of view). Adjust until both tilts read "Level" (opposite edges within 2%, about 2.5°). A tilt makes the
+   same bunch look wider in one part of the view: on 27 Oct the rig leaned 17.9°, so a bunch looked 15%
+   wider at the bottom of the view than at the top. On the test set, 2 cm of height error costs about 8
+   points of A/B accuracy. After replacing the camera or its mount, find the
    new lens position: set `BANAGRADE_LENS_POSITION=auto`, restart with the sheet in view a few times, and put
    the average back into `BANAGRADE_LENS_POSITION`.
 6. Remove the sheet. The trigger boxes it, but the preview labels it "Not a bunch · no banana colour" and

@@ -217,6 +217,12 @@ nav { display: grid; gap: 3px; }
 .guide-edge { fill: rgba(220, 38, 38, .28); }
 .guide-box { fill: none; stroke: rgba(255, 255, 255, .85); stroke-width: 10; stroke-dasharray: 60 40; }
 .guide-cross { stroke: rgba(255, 255, 255, .9); stroke-width: 10; }
+.guide-sheet { fill: none; stroke-width: 14; }
+.guide-sheet.level { stroke: #22c55e; }
+.guide-sheet.tilted { stroke: #ef4444; }
+.alignment-result { margin: 0 0 16px; }
+.alignment-result .camera-meta { margin-bottom: 8px; }
+.alignment-hint { margin: -8px 0 16px; }
 .camera-preview.expanded { position: fixed; inset: 0; z-index: 60; max-height: none; height: 100dvh; aspect-ratio: auto; margin: 0; border-radius: 0; background: #000; }
 .camera-preview:fullscreen { max-height: none; aspect-ratio: auto; border-radius: 0; background: #000; }
 .preview-exit { position: absolute; top: 12px; right: 12px; }

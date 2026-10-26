@@ -95,6 +95,18 @@ describe('lens focus and power', () => {
     expect(mount(CameraCard, { props: { pipeline: camera({ focus: 'unset', lens_position_dioptres: null }) } }).find('dd.bad').text()).toBe('Not set')
   })
 
+  it('CameraCard draws the placement guide over the full view, can hide it and go full screen', async () => {
+    const wrapper = mount(CameraCard, { props: { pipeline: camera({ focus: 'fixed', lens_position_dioptres: 0.99 }) } })
+    expect(wrapper.find('.camera-frame svg.placement-guide').attributes('viewBox')).toBe('0 0 4608 2592')
+    expect(wrapper.find('.guide-box').attributes('width')).toBe('2648')
+    await wrapper.find('.guide-toggle input').setValue(false)
+    expect(wrapper.find('.placement-guide').exists()).toBe(false)
+    await wrapper.findAll('.camera-actions button').find(b => b.text() === 'Full screen').trigger('click')
+    expect(wrapper.find('.camera-preview').classes()).toContain('expanded')
+    await wrapper.find('.preview-exit').trigger('click')
+    expect(wrapper.find('.camera-preview').classes()).not.toContain('expanded')
+  })
+
   it('PowerCard disables both buttons until polkit allows them', () => {
     const power = { reboot: { allowed: false, permission: 'challenge' }, shutdown: { allowed: false, permission: 'challenge' } }
     const wrapper = mount(PowerCard, { props: { power } })

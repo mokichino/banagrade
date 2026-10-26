@@ -171,8 +171,8 @@ def test_draw_overlay_scales_the_box_and_leaves_the_model_frame_untouched() -> N
     ("second", "stable", "label", "color"),
     [
         (((101.0, 101.0, 301.0, 251.0), 0.91, "Stage 2"), True, "Bunch 0.91 (Stage 2) · scanning", OVERLAY_READY),
-        (((180.0, 100.0, 380.0, 250.0), 0.91, "Stage 2"), False, "Bunch 0.91 (Stage 2) · moving, hold still", OVERLAY_CHECKING),
-        (((0.0, 100.0, 200.0, 250.0), 0.91, "backup"), False, "Bunch 0.91 (backup) · touching the edge, move it in", OVERLAY_PROBLEM),
+        (((180.0, 100.0, 380.0, 250.0), 0.91, "Stage 2"), False, "Checking 0.91 (Stage 2) · moving, hold still", OVERLAY_CHECKING),
+        (((0.0, 100.0, 200.0, 250.0), 0.91, "backup"), False, "Checking 0.91 (backup) · touching the edge, move it in", OVERLAY_PROBLEM),
         (None, False, None, None),
     ],
 )
@@ -515,3 +515,34 @@ def test_an_ignored_object_is_not_rechecked_until_the_table_changes(tmp_path, mo
     moved[60:240, 100:420] = (40, 60, 200)
     asyncio.run(pipeline._presence_check(moved))
     assert detector.runs == 2 and pipeline._ignored_label is None
+
+
+def test_a_moving_hand_is_labelled_at_first_sight_and_never_captured(tmp_path, monkeypatch) -> None:
+    detector = CountingDetector()
+    detector.objects = ObjectCheck(0.62, None)  # the trigger boxes a hand opening and closing
+    pipeline = _pipeline(tmp_path, detector)
+    pipeline.presence_interval_s = 0
+    pipeline.release_s = 0
+    clock = [100.0]
+    monkeypatch.setattr("app.pipeline.time.monotonic", lambda: clock[0])
+    hand = _velvet(1)
+    hand[60:300, 150:450] = (150, 180, 230)  # skin is coloured, so the colour check passes it
+    frames = [_velvet(2)] * 2 + [hand] * 6
+
+    async def capture():
+        if not frames:
+            raise asyncio.CancelledError
+        clock[0] += 0.25
+        frame = frames.pop(0)
+        detector.bunch = ((150.0, 60.0, 450.0, 300.0), 0.93, "presence") if frame is hand else None
+        return frame
+
+    async def no_window(frame, box):
+        raise AssertionError("a hand must not reach the stability check")
+
+    monkeypatch.setattr(pipeline, "_capture_lores", capture)
+    monkeypatch.setattr(pipeline, "_stable_and_in_frame", no_window)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(pipeline._run())
+    assert pipeline._overlay.label == "Hand in view (0.62) · let go to scan"
+    assert pipeline.state is PipelineState.IDLE

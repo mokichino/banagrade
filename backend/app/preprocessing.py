@@ -74,6 +74,22 @@ def stage1_input(bgr: Any, settings: MaskSettings | None = None) -> Any:
     return apply_mask(bgr, hsv_mask(bgr, settings))
 
 
+def colour_share(bgr: Any, min_saturation: int = 30, min_value: int = 40) -> float:
+    """Share of the frame that is clearly coloured (HSV saturation >= 30 and not velvet-dark), on a 1152 px wide copy.
+
+    Banana skin, green, yellow or brown, is saturated; paper, the velvet and grey objects are not. All 344
+    dataset photos (Class A, B and Rejected) scored at least 0.19; the white paper graded as Class B on
+    2026-10-26 scored 0.012-0.014. A hand scores about 0.87, so this does not replace the Stage 2 minimum.
+    """
+    import cv2
+
+    height, width = bgr.shape[:2]
+    if width > 1152:
+        bgr = cv2.resize(bgr, (1152, round(height * 1152 / width)), interpolation=cv2.INTER_AREA)
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    return float(((hsv[..., 1] >= min_saturation) & (hsv[..., 2] >= min_value)).mean())
+
+
 @dataclass(frozen=True, slots=True)
 class FrameHealth:
     status: str  # "ok" | "dark" | "obstructed"

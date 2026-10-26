@@ -6,7 +6,9 @@ with Operational Analytics Dashboard*. A ticked item means it is implemented and
 by automated tests or a recorded device check, or closed by a recorded decision. Physical
 validation items stay open until someone performs them on the sorting table; the procedure and
 record sheets are in `ON_SITE_TESTS.md`. `RELEASE_NOTES.md` lists the deployed model hashes,
-configuration, test results and known limitations.
+configuration, test results and known limitations. `THINGS_TO_FIX.md` lists the open problems found in the
+on-site tests, including how Class A/B is decided (bunch width in pixels) against the official standard
+(finger length ≥ 12 cm).
 
 Last updated: 2026-10-25.
 

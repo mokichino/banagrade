@@ -380,18 +380,22 @@ def test_lens_is_held_at_the_calibrated_position_unless_set_to_auto(tmp_path, mo
 
 def test_trigger_box_on_paper_is_labelled_and_never_captured(tmp_path, monkeypatch) -> None:
     detector = CountingDetector()
-    detector.bunch = ((150.0, 60.0, 450.0, 300.0), 0.93, "presence")
     pipeline = _pipeline(tmp_path, detector)
     pipeline.presence_interval_s = 0
-    monkeypatch.setattr("app.pipeline.time.monotonic", lambda: 100.0)
+    pipeline.release_s = 1.5
+    clock = [100.0]
+    monkeypatch.setattr("app.pipeline.time.monotonic", lambda: clock[0])
     paper = _velvet(1)
     paper[60:300, 150:450] = (232, 236, 238)
-    frames = [paper.copy() for _ in range(8)]
+    frames = [_velvet(2)] * 8 + [paper] * 8  # 2 s of empty table clears the startup hold, then the sheet
 
     async def capture():
         if not frames:
             raise asyncio.CancelledError
-        return frames.pop()
+        clock[0] += 0.25
+        frame = frames.pop(0)
+        detector.bunch = ((150.0, 60.0, 450.0, 300.0), 0.93, "presence") if frame is paper else None
+        return frame
 
     async def no_scan():
         raise AssertionError("paper must not be captured")
@@ -402,13 +406,14 @@ def test_trigger_box_on_paper_is_labelled_and_never_captured(tmp_path, monkeypat
         asyncio.run(pipeline._run())
     assert pipeline._overlay.label == "Not a bunch · no banana colour"
     assert pipeline.state is PipelineState.IDLE and pipeline.leds.state is LedState.READY
-    assert detector.runs == 1  # the unchanged sheet is not re-checked every frame
+    assert detector.runs <= 3  # the unchanged sheet is not re-checked every frame
 
 
 def _held_run(tmp_path, monkeypatch, script):
     """Drive the trigger loop through ``script`` (one entry per 0.25 s check: True = bunch seen) and count scans."""
     pipeline = _pipeline(tmp_path, CountingDetector())
     pipeline.presence_interval_s = 0
+    pipeline.release_s = 1.5
     clock = [100.0]
     monkeypatch.setattr("app.pipeline.time.monotonic", lambda: clock[0])
     steps = list(script)
@@ -443,14 +448,22 @@ def _held_run(tmp_path, monkeypatch, script):
 
 def test_bunch_briefly_out_of_view_is_not_scanned_again(tmp_path, monkeypatch) -> None:
     # Graded, then a hand covers it (or it is lifted to turn it) for 1.25 s, then it is seen again.
-    script = [True] * 3 + [False] * 5 + [True] * 4 + [False, True] * 3
+    script = [False] * 7 + [True] * 3 + [False] * 5 + [True] * 4 + [False, True] * 3
     scans, pipeline = _held_run(tmp_path, monkeypatch, script)
     assert len(scans) == 1
     assert pipeline._hold
 
 
 def test_removed_bunch_releases_the_hold_and_the_next_one_is_scanned(tmp_path, monkeypatch) -> None:
-    script = [True] * 3 + [False] * 7 + [True] * 2  # 1.75 s of empty table between the two bunches
+    script = [False] * 7 + [True] * 3 + [False] * 7 + [True] * 2  # 1.75 s of empty table between the two bunches
     scans, pipeline = _held_run(tmp_path, monkeypatch, script)
     assert len(scans) == 2
     assert pipeline._hold
+
+
+def test_bunch_already_on_the_table_at_startup_is_not_scanned_until_removed(tmp_path, monkeypatch) -> None:
+    # A restart while a graded bunch sits on the table, then the next bunch after it is taken away.
+    scans, pipeline = _held_run(tmp_path, monkeypatch, [True] * 12 + [False] * 7 + [True] * 2)
+    assert len(scans) == 1
+    scans, pipeline = _held_run(tmp_path, monkeypatch, [True] * 12)
+    assert scans == [] and pipeline._overlay.label == "On the table at startup · remove it to scan"

@@ -223,6 +223,7 @@ nav { display: grid; gap: 3px; }
 .alignment-result { margin: 0 0 16px; }
 .alignment-result .camera-meta { margin-bottom: 8px; }
 .alignment-hint { margin: -8px 0 16px; }
+.tuning-actions { margin: 16px 0 8px; }
 .camera-preview.expanded { position: fixed; inset: 0; z-index: 60; max-height: none; height: 100dvh; aspect-ratio: auto; margin: 0; border-radius: 0; background: #000; }
 .camera-preview:fullscreen { max-height: none; aspect-ratio: auto; border-radius: 0; background: #000; }
 .preview-exit { position: absolute; top: 12px; right: 12px; }

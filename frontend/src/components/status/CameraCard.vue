@@ -67,6 +67,36 @@ const alignRows = computed(() => {
 })
 const sheetPoints = computed(() => alignment.value?.corners.map(point => point.join(',')).join(' '))
 
+// White balance and brightness matched to the dataset photos (backend/app/camera_tuning.py), saved on the Pi.
+const tuneBusy = ref('')
+const tuneMessage = ref({ text: '', tone: '' })
+async function tune(setting, method = 'POST') {
+  tuneBusy.value = setting
+  tuneMessage.value = { text: '', tone: '' }
+  try {
+    const result = await request(`/api/camera/${setting}`, { method })
+    if (method === 'DELETE') tuneMessage.value = { text: setting === 'white-balance' ? 'White balance back to automatic.' : 'Exposure back to automatic (EV 0).', tone: 'muted' }
+    else if (setting === 'white-balance') tuneMessage.value = result.neutral ? { text: `White balance locked: the sheet is neutral (within ${(result.cast * 100).toFixed(1)}%). Remove the sheet to scan.`, tone: 'ok' } : { text: `White balance locked, but the sheet is still ${(result.cast * 100).toFixed(1)}% off neutral. Check the ring light is on, then try again.`, tone: 'bad' }
+    else tuneMessage.value = result.matched ? { text: `Exposure set to EV ${result.exposure_value}: bunch brightness ${result.bunch_brightness}, dataset ${result.dataset_bunch_brightness}. Remove the bunch to scan.`, tone: 'ok' } : { text: `Exposure set to EV ${result.exposure_value}, but the bunch reads ${result.bunch_brightness} against the dataset's ${result.dataset_bunch_brightness}. Try again.`, tone: 'bad' }
+  } catch (error) {
+    tuneMessage.value = { text: error.message, tone: 'bad' }
+  } finally {
+    tuneBusy.value = ''
+  }
+}
+const whiteBalance = computed(() => {
+  const wb = camera.value.white_balance
+  if (!wb) return { text: 'Unavailable', tone: 'muted', locked: false }
+  if (wb.mode === 'locked') return { text: `Locked to sheet · R ${wb.colour_gains[0].toFixed(2)} B ${wb.colour_gains[1].toFixed(2)}`, tone: 'ok', locked: true }
+  return { text: 'Automatic (drifts)', tone: 'muted', locked: false }
+})
+const exposure = computed(() => {
+  const b = camera.value.brightness
+  if (!b) return { text: 'Unavailable', tone: 'muted', set: false }
+  if (!b.set_at) return { text: 'Automatic (EV 0)', tone: 'muted', set: false }
+  return { text: `EV ${b.exposure_value} · bunch ${b.bunch_brightness} vs dataset ${b.dataset_bunch_brightness}`, tone: 'ok', set: true }
+})
+
 const previewEl = ref(null)
 const expanded = ref(false)
 async function toggleExpanded() {
@@ -146,6 +176,14 @@ const focus = computed(() => {
       <div><dt>Capture resolution</dt><dd>{{ camera.resolution || 'Unavailable' }}</dd></div>
       <div><dt>Lens focus</dt><dd :class="focus.tone">{{ focus.text }}</dd></div>
       <div><dt>LED ring light</dt><dd :class="illumination.tone">{{ illumination.text }}</dd></div>
+      <div><dt>White balance</dt><dd :class="whiteBalance.tone">{{ whiteBalance.text }} <button v-if="whiteBalance.locked" class="text-button" :disabled="!!tuneBusy" @click="tune('white-balance', 'DELETE')">Reset</button></dd></div>
+      <div><dt>Exposure</dt><dd :class="exposure.tone">{{ exposure.text }} <button v-if="exposure.set" class="text-button" :disabled="!!tuneBusy" @click="tune('brightness', 'DELETE')">Reset</button></dd></div>
     </dl>
+    <div class="camera-actions tuning-actions">
+      <button class="secondary-button" :disabled="!camera.available || !!tuneBusy" @click="tune('white-balance')">{{ tuneBusy === 'white-balance' ? 'Measuring…' : 'Set white balance from sheet' }}</button>
+      <button class="secondary-button" :disabled="!camera.available || !!tuneBusy" @click="tune('brightness')">{{ tuneBusy === 'brightness' ? 'Measuring…' : 'Match dataset brightness' }}</button>
+    </div>
+    <p v-if="tuneMessage.text" :class="['small', tuneMessage.tone]">{{ tuneMessage.text }}</p>
+    <p v-else class="muted small">Match the training photos: white balance needs a white sheet flat in the middle; brightness needs a fresh green bunch in view (ripe yellow fruit looks brighter). Scanning pauses while it measures. Both stay set after a restart.</p>
   </div>
 </template>

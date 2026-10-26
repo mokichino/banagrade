@@ -33,7 +33,11 @@ Run commands from a laptop on the same Wi-Fi, or over SSH on the Pi. `PI` below 
    points of A/B accuracy. After replacing the camera or its mount, find the
    new lens position: set `BANAGRADE_LENS_POSITION=auto`, restart with the sheet in view a few times, and put
    the average back into `BANAGRADE_LENS_POSITION`.
-6. Remove the sheet. The trigger boxes it, but the preview labels it "Not a bunch · no banana colour" and
+6. With the sheet still in place, press **Set white balance from sheet**: it locks the colour so the sheet is
+   neutral, as the dataset's backdrop is. Then put a fresh green bunch in the middle and press **Match dataset
+   brightness** (not ripe market fruit, which is naturally brighter). Both stay set after a restart; **Reset**
+   returns to automatic.
+7. Remove the sheet. The trigger boxes it, but the preview labels it "Not a bunch · no banana colour" and
    nothing is captured.
 
 | Check | Result |

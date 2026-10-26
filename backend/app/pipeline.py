@@ -144,6 +144,9 @@ class PresencePipeline:
         # Pi 5 CPU above 100%. A model check takes ~225 ms when Stage 2 sees the bunch and ~505 ms on an empty
         # table (Stage 2, then the COCO backup); the change check in _presence_check skips most idle ones.
         self.presence_interval_s = float(os.getenv("BANAGRADE_PRESENCE_INTERVAL_S", "0.25"))
+        # A graded bunch is held until the table has looked empty this long without a break. One missed check
+        # used to end the hold, so a hand straightening the bunch, or lifting it to turn it, started a new scan.
+        self.release_s = float(os.getenv("BANAGRADE_RELEASE_S", "1.5"))
         self.mask_settings = MaskSettings.from_environment()
         # The trained Stage 1 model saw raw frames; masking dropped held-out accuracy from 0.996 to 0.911.
         # Only enable this for a model retrained on HSV-masked images.
@@ -171,6 +174,7 @@ class PresencePipeline:
         self._camera: Any = None
         self._hold = False
         self._not_a_bunch = False  # the trigger's box is on something colourless, e.g. paper
+        self._empty_since: float | None = None  # while holding: when the bunch went missing from the checks
         self._latest_jpeg: bytes | None = None
         self._latest_jpeg_at = 0.0
         self._overlay: PreviewOverlay | None = None
@@ -378,6 +382,14 @@ class PresencePipeline:
             if detection is None:
                 self._overlay = None
                 self._not_a_bunch = False
+                if self._hold:
+                    now = time.monotonic()
+                    if self._empty_since is None:
+                        self._empty_since = now
+                    if now - self._empty_since < self.release_s:  # covered, missed or lifted, not yet removed
+                        await asyncio.sleep(self.presence_interval_s)
+                        continue
+                    self._empty_since = None
                 if self._hold or self.state is not PipelineState.IDLE:
                     self._hold = False
                     await self._set_state(PipelineState.IDLE)
@@ -385,6 +397,7 @@ class PresencePipeline:
                 await asyncio.sleep(self.presence_interval_s)
                 continue
             box, confidence, source = detection
+            self._empty_since = None
             if self._hold:  # result shown until the bunch is removed
                 self._show(box, self._held_label, self._held_color)
                 await asyncio.sleep(self.presence_interval_s)

@@ -403,3 +403,54 @@ def test_trigger_box_on_paper_is_labelled_and_never_captured(tmp_path, monkeypat
     assert pipeline._overlay.label == "Not a bunch · no banana colour"
     assert pipeline.state is PipelineState.IDLE and pipeline.leds.state is LedState.READY
     assert detector.runs == 1  # the unchanged sheet is not re-checked every frame
+
+
+def _held_run(tmp_path, monkeypatch, script):
+    """Drive the trigger loop through ``script`` (one entry per 0.25 s check: True = bunch seen) and count scans."""
+    pipeline = _pipeline(tmp_path, CountingDetector())
+    pipeline.presence_interval_s = 0
+    clock = [100.0]
+    monkeypatch.setattr("app.pipeline.time.monotonic", lambda: clock[0])
+    steps = list(script)
+    bunch = _velvet(1)
+    bunch[90:270, 160:480] = (40, 200, 220)
+    scans = []
+
+    async def capture():
+        if not steps:
+            raise asyncio.CancelledError
+        clock[0] += 0.25
+        pipeline._seen = steps.pop(0)
+        return bunch
+
+    async def presence(frame):
+        return ((80.0, 45.0, 240.0, 135.0), 0.95, "presence") if pipeline._seen else None
+
+    async def stable(frame, box):
+        return True
+
+    async def scan():
+        scans.append(clock[0])
+
+    monkeypatch.setattr(pipeline, "_capture_lores", capture)
+    monkeypatch.setattr(pipeline, "_presence_check", presence)
+    monkeypatch.setattr(pipeline, "_stable_and_in_frame", stable)
+    monkeypatch.setattr(pipeline, "_process_scan", scan)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(pipeline._run())
+    return scans, pipeline
+
+
+def test_bunch_briefly_out_of_view_is_not_scanned_again(tmp_path, monkeypatch) -> None:
+    # Graded, then a hand covers it (or it is lifted to turn it) for 1.25 s, then it is seen again.
+    script = [True] * 3 + [False] * 5 + [True] * 4 + [False, True] * 3
+    scans, pipeline = _held_run(tmp_path, monkeypatch, script)
+    assert len(scans) == 1
+    assert pipeline._hold
+
+
+def test_removed_bunch_releases_the_hold_and_the_next_one_is_scanned(tmp_path, monkeypatch) -> None:
+    script = [True] * 3 + [False] * 7 + [True] * 2  # 1.75 s of empty table between the two bunches
+    scans, pipeline = _held_run(tmp_path, monkeypatch, script)
+    assert len(scans) == 2
+    assert pipeline._hold

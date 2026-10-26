@@ -118,3 +118,29 @@ def test_exposure_step_and_controls() -> None:
     assert camera_tuning.next_exposure_value(2.9, 20) == 3.0  # clamped
     assert camera_tuning.controls_for({}) == {"ExposureValue": 0.0, "AwbEnable": True}
     assert camera_tuning.controls_for({"colour_gains": [1.9, 1.6], "exposure_value": -0.5}) == {"ExposureValue": -0.5, "AwbEnable": False, "ColourGains": (1.9, 1.6)}
+
+
+def test_brightness_is_not_matched_on_ripe_fruit(tmp_path) -> None:
+    class RipeCamera(TuningCamera):
+        def capture_request(self):
+            request = super().capture_request()
+            frame = request.make_array("main")
+            frame[700:1900, 3500:4400] = (30, 170, 200)  # yellow, hue about 24
+
+            class Ripe:
+                def make_array(self, stream):
+                    return frame
+
+                def get_metadata(self):
+                    return request.get_metadata()
+
+                def release(self):
+                    pass
+
+            return Ripe()
+
+    camera = RipeCamera(sheet=False)
+    pipeline = _pipeline(tmp_path, camera)
+    with pytest.raises(ValueError, match="riper than the dataset"):
+        asyncio.run(pipeline.calibrate_brightness())
+    assert camera.controls["ExposureValue"] == 0.0 and not pipeline._hold

@@ -123,6 +123,31 @@ def test_low_confidence_failure_keeps_stage1_result_and_frame(tmp_path) -> None:
     assert (tmp_path / "frames" / f"{scan['scan_id']}.jpg").is_file()
 
 
+def test_an_unsure_scan_is_check_by_hand_not_a_system_fault(tmp_path) -> None:
+    scan, pipeline, _, events, _ = _run("Unhealthy", 2800.0, tmp_path, confidence=0.65)
+    assert pipeline.leds.state is LedState.CHECK
+    assert pipeline._held_label == "Unsure: Unhealthy 65% (needs 80%) · check by hand"
+    assert pipeline.last_error is None
+    assert not [event for event in events if event["event_type"] == "pipeline_error"]
+    assert scan["error_details"] == "Stage 1 confidence 0.65 is below 0.80"
+
+
+def test_a_real_fault_during_a_scan_is_still_an_error(tmp_path) -> None:
+    class BrokenInference(FakeInference):
+        def classify(self, image):
+            raise RuntimeError("Stage 1 crashed")
+
+    storage = Storage(tmp_path / "p.db")
+    storage.initialize()
+    pipeline = PresencePipeline(storage, BrokenInference("Healthy", 2800.0), LedController(outputs=None))
+    pipeline._camera = FakeCamera()
+    asyncio.run(pipeline._process_scan())
+    scan = storage.get_scan(pipeline.last_scan_id)
+    assert scan["rejection_reason"] == "PIPELINE_ERROR"
+    assert pipeline.leds.state is LedState.ERROR and pipeline.last_error == "Stage 1 crashed"
+    assert pipeline._held_label == "Scan error · see System Status"
+
+
 def test_frame_archive_can_be_disabled(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("BANAGRADE_FRAME_KEEP", "0")
     scan, *_ = _run("Healthy", 2800.0, tmp_path)
@@ -189,7 +214,7 @@ def test_held_result_shows_the_grade_on_the_box(tmp_path) -> None:
     scan, pipeline, *_ = _run("Healthy", 2800.0, tmp_path)
     assert (pipeline._held_label, pipeline._held_color) == ("Class A", OVERLAY_GRADE["Class A"])
     failed, failed_pipeline, *_ = _run("Healthy", 2800.0, tmp_path / "f", confidence=0.5)
-    assert failed_pipeline._held_label == "Technical failure"
+    assert failed_pipeline._held_label == "Unsure: Healthy 50% (needs 80%) · check by hand"
 
 
 def test_preview_draws_a_fresh_box_and_drops_a_stale_one(tmp_path, monkeypatch) -> None:
@@ -312,8 +337,8 @@ def test_weak_stage2_box_is_a_technical_failure_not_a_grade(tmp_path) -> None:
     assert scan["final_grade"] is None
     assert scan["rejection_reason"] == "DETECTION_FAILED"
     assert scan["error_details"] == "Stage 2 confidence 0.75 is below 0.90"
-    assert pipeline.leds.state is LedState.ERROR
-    assert pipeline._held_label == "Technical failure"
+    assert pipeline.leds.state is LedState.CHECK
+    assert pipeline._held_label == "Not measured: outline 75% (needs 90%) · check by hand"
 
 
 
@@ -339,7 +364,7 @@ def test_colourless_object_is_not_graded(tmp_path) -> None:
     assert scan["rejection_reason"] == "NOT_A_BUNCH"
     assert "banana-coloured" in scan["error_details"]
     assert inference.stage1_inputs == [] and inference.stage2_calls == 0
-    assert pipeline.leds.state is LedState.ERROR
+    assert pipeline.leds.state is LedState.CHECK
     assert pipeline._held_label == "Not a bunch · no banana colour"
 
 

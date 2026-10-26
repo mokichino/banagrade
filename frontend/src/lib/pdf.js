@@ -1,6 +1,6 @@
 import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
-import { WIDTH_THRESHOLD_PX, finalGradeLabel, formatConfidence, formatTimestamp, scanLabel, stage1Label, stage2Label } from './grades.js'
+import { WIDTH_THRESHOLD_PX, failureReason, finalGradeLabel, formatConfidence, formatTimestamp, scanLabel, stage1Label, stage2Label } from './grades.js'
 
 const FILLS = { 'Class A': [255, 241, 196], 'Class B': [219, 234, 254], Rejected: [254, 226, 226] }
 
@@ -23,7 +23,7 @@ export function buildScansPdf(scans, { filter = 'All', search = '', generated = 
       formatConfidence(scan.stage1_confidence),
       formatConfidence(scan.stage2_confidence),
       finalGradeLabel(scan),
-      scan.rejection_reason || ''
+      failureReason(scan) || scan.rejection_reason || ''
     ]),
     styles: { fontSize: 8, cellPadding: 4 },
     headStyles: { fillColor: [17, 24, 39] },

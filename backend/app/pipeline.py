@@ -671,8 +671,12 @@ class PresencePipeline:
             await self._set_state(PipelineState.PERSISTING)
             self.storage.save_scan(record)
             if decision.is_technical_failure:
-                self.leds.set(LedState.ERROR)
-                self._held_label, self._held_color = "Technical failure", OVERLAY_FAILURE
+                self.leds.set(LedState.CHECK)
+                if stage2 is not None and stage2.detected:
+                    label = f"Not measured: outline {stage2.confidence:.0%} (needs {self.stage2_min_conf:.0%}) · check by hand"
+                else:
+                    label = "Not measured: no outline found · check by hand"
+                self._held_label, self._held_color = label, OVERLAY_FAILURE
             else:
                 self.leds.show_grade(decision.grade)
                 self._held_label, self._held_color = str(decision.grade), OVERLAY_GRADE.get(str(decision.grade), OVERLAY_FAILURE)
@@ -681,21 +685,31 @@ class PresencePipeline:
         except asyncio.CancelledError:
             raise
         except Exception as error:
-            self.last_error = str(error)
+            # An unsure Stage 1 or a non-bunch is a property of this scan, not a system fault: it gets its own
+            # reason on the box and the "check by hand" LED state, and leaves last_error for camera/code faults.
+            scan_level = isinstance(error, (LowConfidence, NotABunch))
+            if not scan_level:
+                self.last_error = str(error)
             reason = "LOW_CONFIDENCE" if isinstance(error, LowConfidence) else "NOT_A_BUNCH" if isinstance(error, NotABunch) else "PIPELINE_ERROR"
             self.storage.save_scan({
                 "scan_id": scan_id, "session_id": session_id, "captured_at": captured_at, "completed_at": now_iso(),
                 "stage1_status": stage1.label if stage1 else None,
                 "stage1_confidence": stage1.confidence if stage1 else None,
-                "processing_status": "failed", "rejection_reason": reason, "error_details": self.last_error,
+                "processing_status": "failed", "rejection_reason": reason, "error_details": str(error),
                 "inference_time_ms": (time.perf_counter() - started) * 1000,
                 "image_refs": frame_refs if image is not None else None,
             })
-            self.leds.set(LedState.ERROR)
-            self._held_label = NOT_A_BUNCH_LABEL if isinstance(error, NotABunch) else "Technical failure"
+            self.leds.set(LedState.CHECK if scan_level else LedState.ERROR)
+            if isinstance(error, LowConfidence):
+                self._held_label = f"Unsure: {stage1.label} {stage1.confidence:.0%} (needs {self.stage1_min_conf:.0%}) · check by hand"
+            elif isinstance(error, NotABunch):
+                self._held_label = NOT_A_BUNCH_LABEL
+            else:
+                self._held_label = "Scan error · see System Status"
             self._held_color = OVERLAY_FAILURE
             await self._set_state(PipelineState.HOLD)
-            await self._emit("pipeline_error", {"scan_id": scan_id, "error": self.last_error})
+            if not scan_level:
+                await self._emit("pipeline_error", {"scan_id": scan_id, "error": self.last_error})
             await self._emit("scan_completed", {"scan": self.storage.get_scan(scan_id)})
         # Written after the result is shown so the JPEG encode does not add to grading latency.
         if frame_refs and image is not None:

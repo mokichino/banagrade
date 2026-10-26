@@ -7,10 +7,11 @@ export const LED_STATES = {
   rejected: { tone: 'rejected', color: 'Red', label: 'Rejected', detail: 'Unhealthy at Stage 1' },
   booting: { tone: 'booting', color: 'Slow red blink', label: 'Booting / calibrating', detail: 'Camera starting, autofocus locking' },
   error: { tone: 'error', color: 'Fast red blink', label: 'Hardware error', detail: 'Camera blocked, lighting or pipeline fault' },
+  check: { tone: 'error', color: 'Fast red blink', label: 'Check by hand', detail: 'Last bunch not graded · reason on its box and in Recent Scans' },
   offline: { tone: 'offline', color: 'Off', label: 'Backend offline', detail: 'No connection to the edge device' }
 }
 
-export const LED_LEGEND = ['ready', 'class_a', 'class_b', 'rejected', 'booting', 'error']
+export const LED_LEGEND = ['ready', 'class_a', 'class_b', 'rejected', 'booting', 'check', 'error']
 
 export function ledInfo(state) {
   return LED_STATES[state] || LED_STATES.offline
@@ -34,7 +35,8 @@ export function lampPattern(state) {
     case 'class_b': return { ...ALL_OFF, blue: 'on' }
     case 'rejected': return { ...ALL_OFF, red: 'on' }
     case 'booting': return { ...ALL_OFF, red: 'slow' }
-    case 'error': return { ...ALL_OFF, red: 'fast' }
+    case 'error':
+    case 'check': return { ...ALL_OFF, red: 'fast' }
     case 'capture': return { green: 'flash', yellow: 'flash', blue: 'flash', red: 'flash' }
     default: return { ...ALL_OFF }
   }

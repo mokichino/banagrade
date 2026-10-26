@@ -1,5 +1,5 @@
 <script setup>
-import { confidencePercent, finalGradeKey, finalGradeLabel, formatConfidence, formatTimestamp, isHealthy, scanLabel, stage1Label, stage2Label } from '../lib/grades.js'
+import { confidencePercent, failureReason, finalGradeKey, finalGradeLabel, formatConfidence, formatTimestamp, isHealthy, scanLabel, stage1Label, stage2Label } from '../lib/grades.js'
 
 defineProps({ scans: { type: Array, required: true } })
 defineEmits(['select', 'dispute'])
@@ -26,7 +26,7 @@ defineEmits(['select', 'dispute'])
               <small class="tabular">{{ formatConfidence(scan.stage1_confidence) }}</small>
             </div>
           </td>
-          <td><span :class="['grade-chip', finalGradeKey(scan)]">{{ finalGradeLabel(scan) }}</span></td>
+          <td><span :class="['grade-chip', finalGradeKey(scan)]">{{ finalGradeLabel(scan) }}</span><small v-if="finalGradeKey(scan) === 't' && failureReason(scan)" class="failure-reason">{{ failureReason(scan) }}</small></td>
           <td><button class="text-button dispute-button" @click="$emit('dispute', scan)">Dispute</button></td>
         </tr>
         <tr v-if="!scans.length"><td colspan="7" class="empty">No scan records match.</td></tr>

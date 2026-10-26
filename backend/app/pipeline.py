@@ -386,8 +386,9 @@ class PresencePipeline:
             result = await measure()
         finally:
             self._calibrating = False
-            self._hold, self._empty_since = True, None
-            self._held_label, self._held_color = "Calibration · remove it to scan", OVERLAY_FAILURE
+        # Only after a calibration that ran: the sheet or bunch used for it is held, not scanned.
+        self._hold, self._empty_since = True, None
+        self._held_label, self._held_color = "Calibration · remove it to scan", OVERLAY_FAILURE
         camera_tuning.save_settings(self.camera_settings_path, self.camera_settings)
         return result
 

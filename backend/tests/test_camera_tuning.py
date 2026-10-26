@@ -102,6 +102,7 @@ def test_calibration_needs_its_target_in_view(tmp_path, call, message) -> None:
     with pytest.raises(ValueError, match=message):
         asyncio.run(getattr(pipeline, call)())
     assert not pipeline._calibrating
+    assert not pipeline._hold  # a failed calibration leaves whatever is on the table to be scanned
 
 
 def test_calibration_is_refused_mid_scan(tmp_path) -> None:

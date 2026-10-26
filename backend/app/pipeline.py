@@ -24,7 +24,7 @@ from .frames import save_frame
 from .grading import REFERENCE_RESOLUTION, Stage1Result, decide_grade, scale_width_to_reference, width_threshold_px
 from .leds import LedController, LedState
 from .model_inference import HAND_CONFIDENCE, PresenceHit
-from .preprocessing import MaskSettings, colour_share, frame_health, stage1_input
+from .preprocessing import MaskSettings, banana_share, frame_health, stage1_input
 from .storage import Storage, now_iso
 
 Publish = Callable[[dict[str, Any]], Awaitable[None]]
@@ -155,9 +155,9 @@ class PresencePipeline:
         # Full-resolution frames for disputes; ~0.9 MB each, so the default cap is about 1 GB. 0 disables.
         self.frame_dir = Path(os.getenv("BANAGRADE_FRAME_DIR", storage.path.parent / "frames"))
         self.frame_keep = int(os.getenv("BANAGRADE_FRAME_KEEP", "1000"))
-        # A frame with less than this share of clearly coloured pixels is not graded (paper, an empty tray).
-        # The palest dataset bunch scored 0.19 and paper 0.014; 0 disables the check.
-        self.min_colour_share = float(os.getenv("BANAGRADE_MIN_COLOUR_SHARE", "0.05"))
+        # The trigger's box must be at least this share banana-coloured to be graded (not paper, an empty tray).
+        # The palest dataset bunch scored 0.276 and paper 0.004 or less, tinted or not; 0 disables the check.
+        self.min_banana_share = float(os.getenv("BANAGRADE_MIN_BANANA_SHARE", "0.10"))
         # Dioptres to hold the lens at, or "auto" for one autofocus cycle at boot.
         self.lens_setting = os.getenv("BANAGRADE_LENS_POSITION", RIG_LENS_POSITION).strip().lower()
         self.leds = leds or LedController(on_change=self._on_led_change)
@@ -175,6 +175,7 @@ class PresencePipeline:
         self._camera: Any = None
         self._hold = False
         self._ignored_label: str | None = None  # the trigger's box is on something that is not a bunch, e.g. paper
+        self._capture_box: tuple[float, float, float, float] | None = None  # trigger box that passed, in DETECTION_SIZE px
         self._empty_since: float | None = None  # while holding: when the bunch went missing from the checks
         self._latest_jpeg: bytes | None = None
         self._latest_jpeg_at = 0.0
@@ -412,7 +413,7 @@ class PresencePipeline:
                 await asyncio.sleep(self.presence_interval_s)
                 continue
             # The trigger was trained on bunches only and also boxes paper; show those, never capture them.
-            if self._ignored_label is None and colour_share(frame) < self.min_colour_share:
+            if self._ignored_label is None and banana_share(frame, box) < self.min_banana_share:
                 self._ignored_label = NOT_A_BUNCH_LABEL
             if self._ignored_label:
                 self._show(box, self._ignored_label, OVERLAY_FAILURE)
@@ -491,6 +492,7 @@ class PresencePipeline:
         if not await self._objects_clear(second, current):  # a hand may have come in during the window
             return False
         self._show(current, f"Bunch {confidence:.2f} ({source}) · scanning", OVERLAY_READY)
+        self._capture_box = current
         return True
 
     async def _process_scan(self) -> None:
@@ -507,9 +509,12 @@ class PresencePipeline:
             await self._set_state(PipelineState.CAPTURING)
             self.leds.set(LedState.CAPTURE)
             image = await asyncio.to_thread(self._camera.capture_array, "main")
-            share = await asyncio.to_thread(colour_share, image)
-            if share < self.min_colour_share:
-                raise NotABunch(f"Only {share:.1%} of the frame is banana-coloured (needs {self.min_colour_share:.0%}), so it is not graded as a bunch")
+            scale = image.shape[1] / self.DETECTION_SIZE[0]
+            box = tuple(value * scale for value in self._capture_box) if self._capture_box else None
+            self._capture_box = None
+            share = await asyncio.to_thread(banana_share, image, box)
+            if share < self.min_banana_share:
+                raise NotABunch(f"Only {share:.1%} of the bunch's box is banana-coloured (needs {self.min_banana_share:.0%}), so it is not graded as a bunch")
 
             await self._set_state(PipelineState.CLASSIFYING)
             prepared = await asyncio.to_thread(self._stage1_image, image)

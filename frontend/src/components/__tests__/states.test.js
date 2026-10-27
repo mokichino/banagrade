@@ -483,6 +483,8 @@ describe('views', () => {
 
     const shift = mount(HistoryView, { props: { scope: 'old' } })
     await flushPromises()
+    expect(shift.find('button.batch-action').text()).toBe('Void 2 scans…')
+    expect(shift.find('.batch-action').attributes('title')).toBe('Void all 2 scans in this list, on every page')
     await shift.find('.batch-action').trigger('click')
     expect(shift.emitted('void')[0][0]).toEqual({ scans: [items[0], items[1]], restore: false })
     await shift.find('select[aria-label="Filter by grade"]').setValue('Class A')

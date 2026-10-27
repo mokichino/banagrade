@@ -89,6 +89,13 @@ export function formatTimestamp(iso) {
   return date.toLocaleString(undefined, { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
 }
 
+/** A shift as the pickers list it: its name, when it started and how many scans it holds. */
+export function shiftLabel(shift) {
+  const started = new Date(shift.started_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
+  const count = shift.scan_count ?? 0
+  return `${shift.notes || 'Unnamed shift'} · ${started} · ${count} scan${count === 1 ? '' : 's'}`
+}
+
 export function matchesSearch(scan, query) {
   const q = query.trim().toLowerCase()
   if (!q) return true

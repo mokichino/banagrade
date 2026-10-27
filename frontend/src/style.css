@@ -135,8 +135,6 @@ nav { display: grid; gap: 3px; }
 .icon-button:active { transform: scale(.94); }
 .icon-button:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; }
 .icon-button:disabled { opacity: .5; cursor: default; }
-.delete-button { color: var(--text-muted); }
-.delete-button:hover { color: var(--reject-ink); background: var(--reject-soft); }
 
 .status-badge { display: inline-flex; align-items: center; white-space: nowrap; border-radius: 999px; padding: 4px 10px; font-size: 11px; font-weight: 700; }
 .status-badge.loaded { color: #15803d; background: #dcfce7; }
@@ -184,7 +182,9 @@ nav { display: grid; gap: 3px; }
 .swatch.a { background: var(--class-a); }
 .swatch.b { background: var(--class-b); }
 .inline-select { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12px; }
-.inline-select select, .history-controls input, .history-controls select, .modal select, .modal input { min-height: 36px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 0 10px; background: var(--surface); color: var(--text); }
+.shift-form { display: flex; align-items: center; gap: 8px; }
+.shift-form input { min-width: 200px; }
+.inline-select select, .history-controls input, .history-controls select, .modal select, .modal input, .shift-form input { min-height: 36px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 0 10px; background: var(--surface); color: var(--text); }
 
 /* ---------- Table ---------- */
 .history-controls { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; }
@@ -284,13 +284,14 @@ nav { display: grid; gap: 3px; }
 .modal textarea { width: 100%; min-height: 100px; resize: vertical; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 10px 12px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
 .dispute-history { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
-.dispute-history h3 { margin: 0 0 8px; color: var(--text-secondary); font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.dispute-history-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.dispute-history h3 { margin: 0; color: var(--text-secondary); font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 .dispute-history ul { display: grid; gap: 8px; max-height: 220px; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
 .dispute-history li { display: flex; align-items: flex-start; gap: 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 6px 8px 10px; }
 .dispute-history .dispute-body { flex: 1; min-width: 0; font-size: 13px; }
 .dispute-history .dispute-body small { display: block; color: var(--text-muted); font-size: 11px; }
 .dispute-history .dispute-body p { margin: 2px 0 0; overflow-wrap: anywhere; color: var(--text-secondary); }
-.dispute-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; font-size: 12px; }
+.dispute-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 8px; font-size: 12px; }
 
 /* ---------- Responsive ---------- */
 @media (max-width: 1100px) {
@@ -380,4 +381,8 @@ nav { display: grid; gap: 3px; }
 .power-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0 0; }
 .power-confirm p { margin: 14px 0 0; line-height: 1.45; }
 .primary-button.danger { background: var(--reject); }
+.secondary-button.danger-outline { border-color: #f2c3c7; color: var(--reject-ink); }
+.secondary-button.danger-outline:hover:not(:disabled) { background: var(--reject-soft); }
+.form-hint { margin: 8px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.4; }
+.form-error { margin: 8px 0 0; color: var(--reject-ink); font-size: 12px; }
 .primary-button.danger:hover { background: var(--reject-ink); }

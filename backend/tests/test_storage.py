@@ -1,5 +1,6 @@
 import csv
 import io
+import sqlite3
 import zipfile
 from pathlib import Path
 
@@ -94,25 +95,72 @@ def test_dispute_keeps_model_grade_across_repeated_corrections(tmp_path: Path) -
     assert {scan["scan_id"]: scan["disputed"] for scan in storage.list_scans()} == {"a": 1, "b": 0}
 
 
-def test_deleting_disputes_restores_the_previous_grade(tmp_path: Path) -> None:
+def test_deleting_disputes_restores_the_scanner_grade(tmp_path: Path) -> None:
     storage = Storage(tmp_path / "banagrade.db")
     storage.initialize()
     frame = tmp_path / "frames" / "a.jpg"
     frame.parent.mkdir()
     frame.write_bytes(b"\xff\xd8jpeg")
     storage.save_scan(_scan("a", None, "Class B", image_refs=[str(frame)]))
+    storage.save_scan(_scan("b", None, None, processing_status="failed"))
     first = storage.dispute_scan("a", "Middle finger 12.5 cm", "Class A", tmp_path / "retrain")
-    second = storage.dispute_scan("a", "Rotting", "Rejected", tmp_path / "retrain")
+    second = storage.dispute_scan("a", "Middle finger 12.5 cm", "Class A", tmp_path / "retrain")
     assert [row["id"] for row in storage.scan_disputes("a")] == [second["id"], first["id"]]
 
-    assert storage.delete_dispute("a", second["id"])["final_grade"] == "Class A"
-    assert Path(first["archived_frames"][0]).exists()
-    result = storage.delete_dispute("a", first["id"])
-    assert (result["final_grade"], result["remaining_disputes"]) == ("Class B", 0)
+    result = storage.delete_disputes("a")
+    assert (result["final_grade"], result["deleted_disputes"]) == ("Class B", 2)
+    assert storage.scan_disputes("a") == []
     assert not Path(first["archived_frames"][0]).exists()
-    assert storage.list_scans()[0]["disputed"] == 0
+    assert storage.list_scans()[-1]["disputed"] == 0
     with pytest.raises(KeyError):
-        storage.delete_dispute("a", first["id"])
+        storage.delete_disputes("a")
+
+    storage.dispute_scan("b", "Bunch was not on the table", "Rejected", tmp_path / "retrain")
+    assert storage.delete_disputes("b")["final_grade"] is None
+
+
+def test_scans_and_sessions_list_by_shift(tmp_path: Path) -> None:
+    storage = Storage(tmp_path / "banagrade.db")
+    storage.initialize()
+    first = storage.create_session("Kapalong batch")
+    storage.save_scan(_scan("a", first["id"], "Class A"))
+    storage.close_session(first["id"])
+    second = storage.create_session("Toril batch")
+    storage.save_scan(_scan("b", second["id"], "Class B"))
+    storage.save_scan(_scan("c", second["id"], "Class B"))
+
+    assert [scan["scan_id"] for scan in storage.list_scans(session_id=first["id"])] == ["a"]
+    assert len(storage.list_scans()) == 3
+    assert [(row["notes"], row["status"], row["scan_count"]) for row in storage.list_sessions()] == [
+        ("Toril batch", "open", 2),
+        ("Kapalong batch", "closed", 1),
+    ]
+
+
+def test_clear_scans_backs_up_then_deletes_records_and_frames(tmp_path: Path) -> None:
+    storage = Storage(tmp_path / "banagrade.db")
+    storage.initialize()
+    session = storage.create_session("Shift")
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    frame = frames / "a.jpg"
+    frame.write_bytes(b"\xff\xd8jpeg")
+    elsewhere = tmp_path / "keep.jpg"
+    elsewhere.write_bytes(b"\xff\xd8jpeg")
+    storage.save_scan(_scan("a", session["id"], "Class A", image_refs=[str(frame)]))
+    storage.save_scan(_scan("b", session["id"], "Class B", image_refs=[str(elsewhere)]))
+    dispute = storage.dispute_scan("a", "Middle finger 11 cm", "Class B", tmp_path / "retrain")
+
+    result = storage.clear_scans(tmp_path / "backups", frames)
+
+    assert (result["scans"], result["disputes"], result["frames"]) == (2, 1, 1)
+    assert storage.list_scans() == [] and storage.scan_disputes("a") == []
+    assert not frame.exists() and elsewhere.exists()
+    assert Path(dispute["archived_frames"][0]).exists()
+    with sqlite3.connect(result["backup"]) as backup:
+        assert backup.execute("SELECT COUNT(*) FROM scans").fetchone()[0] == 2
+    active = storage.active_session()
+    assert active["id"] == result["session_id"] != session["id"]
 
 
 def test_disputes_zip_sorts_frames_by_corrected_grade(tmp_path: Path) -> None:

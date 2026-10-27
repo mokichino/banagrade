@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sqlite3
 import tempfile
 import uuid
 from contextlib import asynccontextmanager
@@ -32,6 +33,10 @@ class SessionRequest(BaseModel):
 class DisputeRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=1000)
     corrected_grade: str | None = Field(default=None, pattern="^(Class A|Class B|Rejected|Technical Failure)$")
+
+
+class ClearScansRequest(BaseModel):
+    confirm: str = Field(pattern="^CLEAR$")
 
 
 class PowerRequest(BaseModel):
@@ -273,8 +278,8 @@ async def camera_reset(setting: str) -> None:
 
 
 @app.get("/api/inspection/scans")
-def list_scans(limit: int = Query(50, ge=1, le=5000), offset: int = Query(0, ge=0)) -> dict[str, Any]:
-    return {"items": storage.list_scans(limit, offset), "limit": limit, "offset": offset}
+def list_scans(limit: int = Query(50, ge=1, le=5000), offset: int = Query(0, ge=0), session: str | None = Query(None, max_length=64)) -> dict[str, Any]:
+    return {"items": storage.list_scans(limit, offset, resolve_session(session)), "limit": limit, "offset": offset}
 
 
 @app.get("/api/analytics/summary")
@@ -290,34 +295,53 @@ def analytics_trend(session: str | None = Query(None, max_length=64), bucket_min
 
 @app.post("/api/inspection/scans/{scan_id}/dispute", status_code=201)
 async def dispute_scan(scan_id: str, payload: DisputeRequest) -> dict[str, Any]:
+    scan = storage.get_scan(scan_id)
+    if scan is None:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    recorded = scan["final_grade"] or "Technical Failure"
+    if payload.corrected_grade == recorded:
+        raise HTTPException(status_code=400, detail=f"The scan is already recorded as {recorded}. Choose a different grade.")
     try:
-        result = storage.dispute_scan(scan_id, payload.reason, payload.corrected_grade, os.getenv("BANAGRADE_RETRAIN_DIR", "/dataset/retrain"))
+        result = storage.dispute_scan(scan_id, payload.reason, payload.corrected_grade, os.getenv("BANAGRADE_RETRAIN_DIR", storage.path.parent / "retrain"))
     except KeyError as error:
         raise HTTPException(status_code=404, detail="Scan not found") from error
     await events.publish("scan_disputed", result)
     return {**result, "status": "open"}
+
+
+@app.post("/api/inspection/scans/clear")
+async def clear_scans(payload: ClearScansRequest) -> dict[str, Any]:
+    """Back up the database, then delete every scan, dispute, event and frame and start a new shift."""
+    try:
+        result = storage.clear_scans(
+            Path(os.getenv("BANAGRADE_BACKUP_DIR", storage.path.parent / "backups")),
+            Path(os.getenv("BANAGRADE_FRAME_DIR", storage.path.parent / "frames")),
+        )
+    except (sqlite3.Error, RuntimeError) as error:
+        raise HTTPException(status_code=500, detail=f"Nothing was deleted: {error}") from error
+    await events.publish("scans_cleared", result)
+    await events.publish("session_updated", {"session_id": result["session_id"]})
+    return result
+
 
 @app.get("/api/inspection/scans/{scan_id}/disputes")
 def list_scan_disputes(scan_id: str) -> dict[str, Any]:
     return {"items": storage.scan_disputes(scan_id)}
 
 
-@app.delete("/api/inspection/scans/{scan_id}/disputes/{dispute_id}")
-async def delete_dispute(scan_id: str, dispute_id: str) -> dict[str, Any]:
+@app.delete("/api/inspection/scans/{scan_id}/disputes")
+async def delete_disputes(scan_id: str) -> dict[str, Any]:
     try:
-        result = storage.delete_dispute(scan_id, dispute_id)
+        result = storage.delete_disputes(scan_id)
     except KeyError as error:
-        raise HTTPException(status_code=404, detail="Dispute not found") from error
+        raise HTTPException(status_code=404, detail="No disputes for this scan") from error
     await events.publish("dispute_deleted", result)
     return result
 
 
-
 @app.get("/api/sessions")
 def sessions() -> dict[str, Any]:
-    with storage.connect() as connection:
-        rows = connection.execute("SELECT * FROM sessions ORDER BY started_at DESC").fetchall()
-    return {"items": [dict(row) for row in rows]}
+    return {"items": storage.list_sessions()}
 
 
 @app.get("/api/sessions/active")
@@ -349,8 +373,8 @@ def config() -> dict[str, Any]:
 
 
 @app.get("/api/exports/scans.csv", response_class=PlainTextResponse)
-def export_scans() -> PlainTextResponse:
-    return PlainTextResponse(scans_csv(storage.list_scans(100000, 0)), media_type="text/csv")
+def export_scans(session: str | None = Query(None, max_length=64)) -> PlainTextResponse:
+    return PlainTextResponse(scans_csv(storage.list_scans(100000, 0, resolve_session(session))), media_type="text/csv")
 
 
 @app.get("/api/exports/disputes.zip")

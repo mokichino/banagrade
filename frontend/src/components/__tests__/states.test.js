@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import ScanTable from '../ScanTable.vue'
 import DisputeModal from '../DisputeModal.vue'
+import ClearScansDialog from '../ClearScansDialog.vue'
 import ModelsCard from '../status/ModelsCard.vue'
 import OperationalSummaryCard from '../status/OperationalSummaryCard.vue'
 import HardwareStatusCard from '../status/HardwareStatusCard.vue'
@@ -61,35 +62,80 @@ describe('ScanTable', () => {
 })
 
 describe('DisputeModal', () => {
-  it('lists earlier disputes and deletes one after confirming', async () => {
-    let items = [
-      { id: 'x2', reason: 'Rotting', corrected_grade: 'Rejected', original_grade: 'Class B', created_at: '2026-10-27T05:00:00Z' },
+  it('deletes all disputes after confirming and goes back to the scanner grade', async () => {
+    const items = [
+      { id: 'x2', reason: 'Middle finger 12.5 cm', corrected_grade: 'Class A', original_grade: 'Class B', created_at: '2026-10-27T05:00:00Z' },
       { id: 'x1', reason: 'Middle finger 12.5 cm', corrected_grade: 'Class A', original_grade: 'Class B', created_at: '2026-10-27T04:00:00Z' }
     ]
     const fetch = vi.fn(async (url, options = {}) => {
-      if (options.method === 'DELETE') {
-        items = items.filter(item => !String(url).endsWith(`/${item.id}`))
-        return { ok: true, status: 200, json: async () => ({ id: 'x2', final_grade: 'Class A', remaining_disputes: 1 }) }
-      }
+      if (options.method === 'DELETE') return { ok: true, status: 200, json: async () => ({ scan_id: 's1', final_grade: 'Class B', deleted_disputes: 2 }) }
       return { ok: true, status: 200, json: async () => ({ items }) }
     })
     vi.stubGlobal('fetch', fetch)
     const wrapper = mount(DisputeModal, { props: { scan: null } })
-    await wrapper.setProps({ scan: { scan_id: 's1', final_grade: 'Rejected', disputed: 1 } })
+    await wrapper.setProps({ scan: { scan_id: 's1', final_grade: 'Class A', disputed: 1 } })
     await flushPromises()
     expect(wrapper.findAll('.dispute-history li')).toHaveLength(2)
-    expect(wrapper.text()).toContain('Class B → Rejected')
+    expect(wrapper.text()).toContain('Class B → Class A')
 
-    await wrapper.find('.dispute-history .delete-button').trigger('click')
-    expect(wrapper.find('.dispute-confirm').text()).toContain('Delete this dispute?')
+    await wrapper.findAll('.dispute-history button').find(button => button.text() === 'Delete disputes').trigger('click')
+    expect(wrapper.find('.dispute-confirm').text()).toContain('Delete all 2 disputes? The grade goes back to Class B')
     expect(fetch).toHaveBeenCalledTimes(1)
     await wrapper.findAll('.dispute-confirm button').find(button => button.text() === 'Delete').trigger('click')
     await flushPromises()
 
-    expect(fetch).toHaveBeenCalledWith('/api/inspection/scans/s1/disputes/x2', expect.objectContaining({ method: 'DELETE' }))
-    expect(wrapper.findAll('.dispute-history li')).toHaveLength(1)
-    expect(wrapper.text()).toContain('Recorded: Class A')
+    expect(fetch).toHaveBeenCalledWith('/api/inspection/scans/s1/disputes', expect.objectContaining({ method: 'DELETE' }))
+    expect(wrapper.find('.dispute-history').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Recorded: Class B')
     expect(wrapper.emitted('changed')).toHaveLength(1)
+  })
+
+  it('starts with no grade chosen, refuses the recorded grade and asks for the finger length', async () => {
+    mockFetch({ '/api/inspection/scans/s2/disputes': { items: [] } })
+    const wrapper = mount(DisputeModal, { props: { scan: null } })
+    await wrapper.setProps({ scan: { scan_id: 's2', final_grade: 'Class B' } })
+    await flushPromises()
+    const save = () => wrapper.find('.modal-actions .primary-button')
+    expect(wrapper.find('select').element.value).toBe('')
+    expect(save().attributes('disabled')).toBeDefined()
+
+    await wrapper.find('select').setValue('Class B')
+    expect(wrapper.find('.form-error').text()).toContain('already recorded as Class B')
+    expect(save().attributes('disabled')).toBeDefined()
+
+    await wrapper.find('select').setValue('Class A')
+    expect(wrapper.find('.form-error').exists()).toBe(false)
+    expect(wrapper.find('.form-hint').text()).toContain('12 cm or more')
+    expect(wrapper.find('textarea').attributes('placeholder')).toContain('middle finger 12.5 cm')
+    expect(save().attributes('disabled')).toBeUndefined()
+  })
+
+  it('treats a missing grade as a recorded technical failure', async () => {
+    mockFetch({ '/api/inspection/scans/s3/disputes': { items: [] } })
+    const wrapper = mount(DisputeModal, { props: { scan: null } })
+    await wrapper.setProps({ scan: { scan_id: 's3', final_grade: null } })
+    await wrapper.find('select').setValue('Technical Failure')
+    expect(wrapper.find('.form-error').text()).toContain('already recorded as Technical failure')
+  })
+})
+
+describe('ClearScansDialog', () => {
+  it('only clears after CLEAR is typed and shows where the backup went', async () => {
+    const fetch = mockFetch({ '/api/inspection/scans/clear': { backup: '/var/lib/banagrade/backups/banagrade-before-clear-1.db', scans: 96, disputes: 42, frames: 96, session_id: 'n' } })
+    const wrapper = mount(ClearScansDialog, { props: { open: false, scanCount: 96 } })
+    await wrapper.setProps({ open: true })
+    const button = () => wrapper.find('.primary-button.danger')
+    expect(button().text()).toBe('Delete 96 scans')
+    expect(button().attributes('disabled')).toBeDefined()
+    await wrapper.find('input').setValue('clear')
+    expect(button().attributes('disabled')).toBeUndefined()
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(fetch).toHaveBeenCalledWith('/api/inspection/scans/clear', expect.objectContaining({ method: 'POST', body: JSON.stringify({ confirm: 'CLEAR' }) }))
+    expect(wrapper.text()).toContain('Cleared 96 scans, 42 disputes and 96 photos')
+    expect(wrapper.text()).toContain('banagrade-before-clear-1.db')
+    expect(wrapper.emitted('cleared')).toHaveLength(1)
   })
 })
 
@@ -247,7 +293,7 @@ describe('views', () => {
     mockFetch({
       '/api/analytics/summary': { total_scans: 0, total_completed_scans: 0, class_a_count: 0, class_b_count: 0, rejected_count: 0, technical_failure_count: 0 },
       '/api/analytics/trend': { items: [] },
-      '/api/sessions/active': { session: null },
+      '/api/sessions': { items: [] },
       '/api/inspection/scans': { items: [] }
     })
     const wrapper = mount(DashboardView)
@@ -255,6 +301,51 @@ describe('views', () => {
     expect(wrapper.text()).toContain('No accepted bunches yet.')
     expect(wrapper.text()).toContain('No graded scans in this period yet.')
     expect(wrapper.emitted('error')).toBeUndefined()
+  })
+
+  const SHIFTS = [
+    { id: 'now', notes: 'Toril batch', status: 'open', started_at: '2026-10-27T05:30:00Z', ended_at: null, scan_count: 3 },
+    { id: 'old', notes: 'Kapalong batch', status: 'closed', started_at: '2026-10-26T18:00:00Z', ended_at: '2026-10-27T05:30:00Z', scan_count: 40 }
+  ]
+
+  it('Dashboard starts a named shift and shows a past one', async () => {
+    const fetch = mockFetch({
+      '/api/analytics/summary': { total_scans: 3 },
+      '/api/analytics/trend': { items: [] },
+      '/api/sessions': { items: SHIFTS },
+      '/api/inspection/scans': { items: [] }
+    })
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    expect(wrapper.find('.shift-meta').text()).toContain('Toril batch')
+    expect(wrapper.findAll('select[aria-label="Shift"] option').map(option => option.text())).toEqual(['Current shift', 'All shifts', expect.stringContaining('Kapalong batch')])
+
+    await wrapper.find('select[aria-label="Shift"]').setValue('old')
+    await flushPromises()
+    expect(fetch).toHaveBeenCalledWith('/api/analytics/summary?session=old', expect.anything())
+    expect(fetch).toHaveBeenCalledWith('/api/inspection/scans?session=old&limit=8', expect.anything())
+    expect(wrapper.find('.shift-meta').text()).toContain('ended')
+
+    await wrapper.findAll('button').find(button => button.text() === 'Start new shift').trigger('click')
+    await wrapper.find('input[aria-label="New shift name"]').setValue('  Toril batch 2  ')
+    await wrapper.find('.shift-form').trigger('submit')
+    await flushPromises()
+    expect(fetch).toHaveBeenCalledWith('/api/sessions', expect.objectContaining({ method: 'POST', body: JSON.stringify({ notes: 'Toril batch 2' }) }))
+    expect(wrapper.find('select[aria-label="Shift"]').element.value).toBe('active')
+  })
+
+  it('History lists one shift and exports only that shift', async () => {
+    const fetch = mockFetch({ '/api/inspection/scans': { items: [{ scan_id: 'a1', final_grade: 'Class B', processing_status: 'completed', captured_at: '2026-10-26T19:00:00Z' }] }, '/api/sessions': { items: SHIFTS } })
+    const wrapper = mount(HistoryView)
+    await flushPromises()
+    expect(fetch).toHaveBeenCalledWith('/api/inspection/scans?limit=5000', expect.anything())
+
+    await wrapper.find('select[aria-label="Shift"]').setValue('old')
+    await flushPromises()
+    expect(fetch).toHaveBeenCalledWith('/api/inspection/scans?limit=5000&session=old', expect.anything())
+    expect(wrapper.find('a.link-button').attributes('href')).toBe('/api/exports/scans.csv?session=old')
+    // Clearing still covers every shift, so the button is not limited to the one shown.
+    expect(wrapper.find('button.danger-outline').attributes('disabled')).toBeUndefined()
   })
 
   it('Dashboard reports an unreachable API instead of showing totals', async () => {

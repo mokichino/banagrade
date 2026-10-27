@@ -26,7 +26,7 @@ from .grading import REFERENCE_RESOLUTION, Stage1Result, decide_grade, scale_wid
 from .leds import LedController, LedState
 from .model_inference import HAND_CONFIDENCE, PresenceHit
 from .preprocessing import MaskSettings, banana_share, frame_health, stage1_input
-from .storage import Storage, now_iso
+from .storage import SHIFT_FROM_SCAN, Storage, now_iso
 
 Publish = Callable[[dict[str, Any]], Awaitable[None]]
 
@@ -615,7 +615,7 @@ class PresencePipeline:
         self.last_scan_id = scan_id
         captured_at = now_iso()
         started = time.perf_counter()
-        session_id = self.storage.active_session_id()
+        session_id = self.storage.ensure_active_session(SHIFT_FROM_SCAN)["id"]
         threshold = width_threshold_px()
         image = None
         stage1 = None

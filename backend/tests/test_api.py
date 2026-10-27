@@ -64,6 +64,38 @@ def test_telemetry_and_shift_scoped_analytics(client) -> None:
     assert [(shift["name"], shift["scan_count"]) for shift in shifts][0] == ("afternoon", 0)
 
 
+def test_end_shift_leaves_the_current_view_empty_not_all_time(client) -> None:
+    test_client, api = client
+    session = test_client.get("/api/sessions/active").json()["session"]
+    api.storage.save_scan({"scan_id": "s1", "session_id": session["id"], "captured_at": "2026-10-27T08:00:00+00:00", "final_grade": "Class A", "processing_status": "completed"})
+    api.storage.record_temperature(session["id"], 50.0, 0)
+    assert test_client.post(f"/api/sessions/{session['id']}/close").status_code == 204
+
+    assert test_client.get("/api/sessions/active").json()["session"] is None
+    current = test_client.get("/api/analytics/summary?session=active").json()
+    assert (current["total_scans"], current["cpu_temperature"]) == (0, None)
+    assert test_client.get("/api/inspection/scans?session=active").json()["items"] == []
+    assert test_client.get("/api/analytics/summary").json()["total_scans"] == 1
+    ended = test_client.get(f"/api/analytics/summary?session={session['id']}").json()
+    assert (ended["class_a_count"], ended["cpu_temperature"]["mean_c"]) == (1, 50.0)
+
+
+def test_temperature_is_sampled_only_while_a_shift_is_open(client, monkeypatch) -> None:
+    _, api = client
+    from app import telemetry
+
+    monkeypatch.setattr(telemetry, "cpu_temperature_c", lambda: 47.5)
+    session = api.storage.active_session()
+    assert telemetry.sample_temperature(api.storage) is True
+    api.storage.close_session(session["id"])
+    assert telemetry.sample_temperature(api.storage) is False
+    monkeypatch.setattr(telemetry, "cpu_temperature_c", lambda: None)  # off the Pi
+    api.storage.create_session("Shift")
+    assert telemetry.sample_temperature(api.storage) is False
+    assert api.storage.temperature_summary()["samples"] == 1
+    assert api.storage.temperature_summary(session["id"])["mean_c"] == 47.5
+
+
 def test_serves_built_dashboard_without_shadowing_api(tmp_path, monkeypatch) -> None:
     dist = tmp_path / "dist"
     (dist / "assets").mkdir(parents=True)

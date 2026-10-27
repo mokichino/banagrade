@@ -38,7 +38,8 @@ function close() {
       <p class="eyebrow">Shift</p>
       <h2 id="shift-title">Start a new shift</h2>
       <p v-if="current?.scan_count" class="muted">The current shift (started {{ shiftStart(current) }}, {{ plural(current.scan_count, 'scan') }}) ends now and moves to Past shifts with its totals. Scans from now on count toward the new shift.</p>
-      <p v-else class="muted">The current shift has no scans, so it is not kept under Past shifts. Scans from now on count toward the new shift.</p>
+      <p v-else-if="current" class="muted">The current shift has no scans, so it is not kept under Past shifts. Scans from now on count toward the new shift.</p>
+      <p v-else class="muted">No shift is open. Scans from now on count toward the new shift.</p>
       <label><span>Name <span class="optional">(optional)</span></span>
         <input ref="input" v-model="name" maxlength="80" placeholder="e.g. Toril batch" autocomplete="off">
       </label>

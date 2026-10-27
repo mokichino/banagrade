@@ -7,6 +7,7 @@ import { formatPercent } from '../lib/grades.js'
 import { currentShift, plural, scopeQuery, scopeShift, shiftDuration, shiftStart } from '../lib/shifts.js'
 import { bucketLabel, intervalName, isIsolated, tickLabels, tickStep, timeTicks, trendBounds, trendPoints } from '../lib/trend.js'
 import ScanTable from '../components/ScanTable.vue'
+import EndShiftDialog from '../components/EndShiftDialog.vue'
 import ShiftSelect from '../components/ShiftSelect.vue'
 import StartShiftDialog from '../components/StartShiftDialog.vue'
 
@@ -25,18 +26,25 @@ const shifts = ref([])
 const recent = ref([])
 const loading = ref(true)
 const starting = ref(false)
+const ending = ref(false)
 
 const withScope = (path, extra = '') => {
   const query = [scopeQuery(scope.value), extra].filter(Boolean).join('&')
   return query ? `${path}?${query}` : path
 }
 const shown = computed(() => scopeShift(scope.value, shifts.value))
+const open = computed(() => currentShift(shifts.value))
 const viewingPast = computed(() => !['active', 'all'].includes(scope.value))
+// Recorded by the service once a minute while a shift is open (thesis §4.7).
+const cpuNote = computed(() => {
+  const cpu = summary.value.cpu_temperature
+  return cpu ? `CPU ${cpu.mean_c.toFixed(1)} °C average, ${cpu.max_c.toFixed(1)} °C peak` : ''
+})
 const scopeNote = computed(() => {
-  if (scope.value === 'all') return 'Totals across every shift'
-  if (!shown.value) return ''
-  const name = shown.value.name ? `${shown.value.name} · ` : ''
-  return viewingPast.value ? `${name}Ran for ${shiftDuration(shown.value)}` : `${name}Started ${shiftStart(shown.value)}`
+  if (scope.value === 'all') return ['Totals across every shift', cpuNote.value].filter(Boolean).join(' · ')
+  if (!shown.value) return scope.value === 'active' && shifts.value.length ? 'No shift open. The next bunch scanned starts one.' : ''
+  const when = viewingPast.value ? `Ran for ${shiftDuration(shown.value)}` : `Started ${shiftStart(shown.value)}`
+  return [shown.value.name, when, cpuNote.value].filter(Boolean).join(' · ')
 })
 const scopePhrase = computed(() => (scope.value === 'all' ? 'across all shifts' : viewingPast.value ? 'in this shift' : 'this shift'))
 const emptyNote = computed(() => (viewingPast.value ? 'in this shift' : scope.value === 'all' ? 'yet' : 'in this shift yet'))
@@ -165,6 +173,13 @@ function onShiftStarted() {
   else scope.value = 'active'
 }
 
+// Show the shift just ended with its final totals; one without scans is not kept, so stay on the current view.
+function onShiftEnded(shift) {
+  ending.value = false
+  if (shift.scan_count) scope.value = shift.id
+  else load()
+}
+
 onMounted(load)
 watch(() => props.refreshKey, load)
 watch([scope, bucketMinutes], load)
@@ -176,7 +191,10 @@ defineExpose({ load })
     <div class="dashboard-toolbar">
       <label class="inline-select">Showing <ShiftSelect v-model="scope" :shifts="shifts" /></label>
       <p class="muted shift-meta">{{ scopeNote }}</p>
-      <button class="secondary-button" @click="starting = true">Start new shift</button>
+      <div class="shift-actions">
+        <button v-if="open && scope === 'active'" class="secondary-button" @click="ending = true">End shift</button>
+        <button class="secondary-button" @click="starting = true">Start new shift</button>
+      </div>
     </div>
     <div v-if="viewingPast" class="scope-notice" role="status">
       <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
@@ -257,6 +275,7 @@ defineExpose({ load })
       <ScanTable :scans="recent" :empty-text="`No scans ${emptyNote}.`" @select="$emit('select', $event)" @dispute="$emit('dispute', $event)" @void="$emit('void', $event)" />
     </div>
 
-    <StartShiftDialog :open="starting" :current="currentShift(shifts)" @close="starting = false" @started="onShiftStarted" />
+    <StartShiftDialog :open="starting" :current="open" @close="starting = false" @started="onShiftStarted" />
+    <EndShiftDialog :open="ending" :current="open" @close="ending = false" @ended="onShiftEnded" />
   </section>
 </template>

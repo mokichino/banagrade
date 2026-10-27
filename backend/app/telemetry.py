@@ -6,11 +6,15 @@ unavailable (for example on a development laptop). Nothing is estimated.
 
 from __future__ import annotations
 
+import asyncio
+import sqlite3
 import time
 from pathlib import Path
 from typing import Any
 
 LATENCY_TARGET_MS = 2000.0
+# Once a minute, as the thesis §4.7 sampler did, so a shift's CPU temperature needs no separate logger.
+TEMPERATURE_SAMPLE_S = 60.0
 
 
 def _read(path: str) -> str | None:
@@ -50,6 +54,25 @@ def system_uptime_s() -> float | None:
 def device_model() -> str | None:
     raw = _read("/proc/device-tree/model")
     return raw.rstrip("\x00") if raw else None
+
+
+def sample_temperature(storage: Any) -> bool:
+    """Record one CPU temperature reading against the open shift. Nothing is recorded between shifts or off the Pi."""
+    session_id, temperature = storage.active_session_id(), cpu_temperature_c()
+    if session_id is None or temperature is None:
+        return False
+    storage.record_temperature(session_id, temperature, (fan_state() or {}).get("level"))
+    return True
+
+
+async def sample_temperature_forever(storage: Any, interval_s: float = TEMPERATURE_SAMPLE_S) -> None:
+    # The first reading is a minute after start, so a restart adds no extra sample and a short test run none at all.
+    while True:
+        await asyncio.sleep(interval_s)
+        try:
+            await asyncio.to_thread(sample_temperature, storage)
+        except sqlite3.Error:  # a busy or full database must not stop the sampler, let alone grading
+            pass
 
 
 def read_telemetry(service_started_at: float, storage: Any) -> dict[str, Any]:

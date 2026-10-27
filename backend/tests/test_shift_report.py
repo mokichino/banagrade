@@ -37,6 +37,15 @@ def test_report_prints_section_4_7_numbers(tmp_path, capsys) -> None:
     assert "Service restarts during sampling: 1" in out
 
 
+def test_report_reads_cpu_temperature_the_service_recorded(tmp_path, capsys) -> None:
+    db, session = _db(tmp_path)
+    storage = Storage(db)
+    for reading in (49.0, 53.0):
+        storage.record_temperature(session, reading, 0)
+    assert shift_report.report(db, None, None, api=None) == 0
+    assert "CPU temperature: mean 51.0 °C · max 53.0 °C over 2 samples" in capsys.readouterr().out
+
+
 def test_reconciliation_fails_when_dashboard_disagrees(tmp_path, monkeypatch, capsys) -> None:
     db, _ = _db(tmp_path)
     good = {"total_scans": 4, "class_a_count": 1, "class_b_count": 1, "rejected_count": 1, "technical_failure_count": 1, "voided_count": 0}

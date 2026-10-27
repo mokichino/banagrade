@@ -21,8 +21,8 @@ from .drift import drift_report
 from .leds import GRADE_TO_LED, LedState
 from .model_inference import UltralyticsInference
 from .pipeline import PipelineState, PresencePipeline
-from .telemetry import read_telemetry
-from .storage import Storage, disputes_zip, now_iso, scans_csv
+from .telemetry import read_telemetry, sample_temperature_forever
+from .storage import SHIFT_FROM_SCAN, Storage, disputes_zip, now_iso, scans_csv
 
 
 class SessionRequest(BaseModel):
@@ -86,7 +86,9 @@ async def lifespan(_: FastAPI):
     await pipeline.start(lambda event: events.publish(event.get("event_type", "pipeline_event"), event))
     if demo_mode() and not pipeline.enabled:
         pipeline.leds.set(LedState.READY)  # presentation without a camera: start on green, not an error
+    sampler = asyncio.create_task(sample_temperature_forever(storage))
     yield
+    sampler.cancel()
     await pipeline.stop()
 
 
@@ -99,10 +101,14 @@ app.add_middleware(
 )
 
 
+# Matches no shift, so the current-shift view is empty, not all-time, between End shift and the next scan.
+NO_OPEN_SHIFT = "none-open"
+
+
 def resolve_session(session: str | None) -> str | None:
     """`session=active` scopes analytics to the open shift; omit for all-time totals."""
     if session == "active":
-        return storage.active_session_id()
+        return storage.active_session_id() or NO_OPEN_SHIFT
     return session
 
 
@@ -134,7 +140,7 @@ async def simulate_scan() -> dict[str, Any]:
     import random
     from datetime import UTC, datetime
 
-    record = demo.generate_scan(random.Random(), datetime.now(UTC), storage.active_session_id())
+    record = demo.generate_scan(random.Random(), datetime.now(UTC), storage.ensure_active_session(SHIFT_FROM_SCAN)["id"])
     storage.save_scan(record)
     scan = storage.get_scan(record["scan_id"])
     pipeline.leds.set(LedState.CAPTURE)

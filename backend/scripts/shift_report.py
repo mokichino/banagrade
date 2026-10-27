@@ -80,7 +80,9 @@ def report(db: Path, session: str | None, telemetry: Path | None, api: str | Non
     connection = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     connection.row_factory = sqlite3.Row
     shift = _pick_session(connection, session)
-    scans = connection.execute("SELECT * FROM scans WHERE session_id = ? ORDER BY captured_at", (shift["id"],)).fetchall()
+    every = connection.execute("SELECT * FROM scans WHERE session_id = ? ORDER BY captured_at", (shift["id"],)).fetchall()
+    # Voided scans (duplicates, test objects) are left out of every total, as on the dashboard.
+    scans = [scan for scan in every if "voided_at" not in scan.keys() or scan["voided_at"] is None]
 
     counts = {grade: sum(scan["final_grade"] == grade for scan in scans) for grade in GRADES}
     failures = len(scans) - sum(counts.values())
@@ -92,7 +94,8 @@ def report(db: Path, session: str | None, telemetry: Path | None, api: str | Non
         duration = f"{span.total_seconds() / 3600:.2f} h between first and last scan"
 
     print(f"Shift {shift['id']} ({shift['status']}), started {shift['started_at']}, ended {shift['ended_at'] or 'still open'}")
-    print(f"Scans: {len(scans)} · Class A {counts['Class A']} · Class B {counts['Class B']} · Rejected {counts['Rejected']} · technical failures {failures}")
+    print(f"Scans: {len(scans)} · Class A {counts['Class A']} · Class B {counts['Class B']} · Rejected {counts['Rejected']} · technical failures {failures}"
+          + (f" · {len(every) - len(scans)} voided, not counted" if len(every) > len(scans) else ""))
     print(f"Sustained run: {duration}")
     print(f"End-to-end latency: {_stats([scan['inference_time_ms'] for scan in completed])}")
     print(f"Stage 1 latency: {_stats([t['stage1_ms'] for t in timings if t.get('stage1_ms') is not None])}")
@@ -113,7 +116,7 @@ def report(db: Path, session: str | None, telemetry: Path | None, api: str | Non
         return 0
     summary = fetch(api, f"/api/analytics/summary?session={shift['id']}")
     expected = {"total_scans": len(scans), "class_a_count": counts["Class A"], "class_b_count": counts["Class B"],
-                "rejected_count": counts["Rejected"], "technical_failure_count": failures}
+                "rejected_count": counts["Rejected"], "technical_failure_count": failures, "voided_count": len(every) - len(scans)}
     mismatches = {key: (summary.get(key), value) for key, value in expected.items() if summary.get(key) != value}
     if mismatches:
         print(f"RECONCILIATION FAILED (dashboard, SQLite): {mismatches}")

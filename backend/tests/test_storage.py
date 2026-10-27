@@ -98,11 +98,13 @@ def test_migration_adds_shift_names_without_renaming_old_shifts(tmp_path: Path) 
     from app.storage import SCHEMA
 
     with storage.connect() as connection:
-        connection.executescript(SCHEMA.replace("    notes TEXT,\n    name TEXT\n", "    notes TEXT\n"))
+        old = SCHEMA.replace("    notes TEXT,\n    name TEXT\n", "    notes TEXT\n").replace("    error_details TEXT,\n    voided_at TEXT,\n    void_reason TEXT\n", "    error_details TEXT\n")
+        assert "voided_at" not in old and "name TEXT" not in old
+        connection.executescript(old)
         connection.execute("INSERT INTO sessions (id, started_at, status, notes) VALUES ('old', '2026-10-20T04:58:24+00:00', 'open', 'Shift opened automatically at startup')")
     storage.initialize()
     [old] = storage.list_sessions()
-    assert (old["notes"], old["name"]) == ("Shift opened automatically at startup", None)
+    assert (old["notes"], old["name"], old["voided_count"]) == ("Shift opened automatically at startup", None, 0)
 
 
 def test_dispute_keeps_model_grade_across_repeated_corrections(tmp_path: Path) -> None:
@@ -190,16 +192,51 @@ def test_clear_scans_backs_up_then_deletes_records_and_frames(tmp_path: Path) ->
 
     assert (result["scans"], result["disputes"], result["frames"], result["shifts"]) == (2, 1, 1, 2)
     assert storage.list_scans() == [] and storage.scan_disputes("a") == []
-    assert not frame.exists() and elsewhere.exists()
+    # The photo moves into the backup folder instead of being deleted, so a clear can be undone completely.
+    folder = Path(result["backup"])
+    assert folder.parent == tmp_path / "backups" and folder.name.startswith("clear-")
+    assert not frame.exists() and (folder / "frames" / "a.jpg").read_bytes() == b"\xff\xd8jpeg"
+    assert elsewhere.exists()
     assert Path(dispute["archived_frames"][0]).exists()
-    with sqlite3.connect(result["backup"]) as backup:
+    with sqlite3.connect(folder / "banagrade.db") as backup:
         assert backup.execute("SELECT COUNT(*) FROM scans").fetchone()[0] == 2
     active = storage.active_session()
     assert active["id"] == result["session_id"] != session["id"]
     # The emptied shifts are in the backup only; the new shift is the one left.
     assert [row["id"] for row in storage.list_sessions()] == [active["id"]]
-    with sqlite3.connect(result["backup"]) as backup:
+    with sqlite3.connect(folder / "banagrade.db") as backup:
         assert backup.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 2
+
+
+def test_voided_scans_stay_listed_but_count_nowhere(tmp_path: Path) -> None:
+    storage = Storage(tmp_path / "banagrade.db")
+    storage.initialize()
+    session = storage.ensure_active_session()
+    storage.save_scan(_scan("dup", session["id"], "Rejected", "2026-10-26T20:28:23+00:00"))
+    storage.save_scan(_scan("keep", session["id"], "Rejected", "2026-10-26T20:45:47+00:00"))
+    storage.save_scan(_scan("paper", session["id"], None, "2026-10-26T20:46:00+00:00", rejection_reason="NOT_A_BUNCH"))
+
+    assert storage.void_scans(["dup", "paper", "missing", "dup"], "Duplicate scan of the same bunch") == ["dup", "paper"]
+    # A second void keeps the first reason.
+    assert storage.void_scans(["dup"], "Something else") == []
+    summary = storage.analytics_summary(session["id"])
+    assert (summary["total_scans"], summary["rejected_count"], summary["technical_failure_count"], summary["voided_count"]) == (1, 1, 0, 2)
+    assert summary["rejection_rate"] == 100.0
+    assert [item["total"] for item in storage.rejection_trend(session["id"], 60)] == [1]
+    assert [(row["scan_count"], row["voided_count"]) for row in storage.list_sessions()] == [(1, 2)]
+    assert len(storage.recent_scans_with_disputes(10)) == 1
+    listed = {scan["scan_id"]: scan for scan in storage.list_scans()}
+    assert len(listed) == 3 and listed["dup"]["void_reason"] == "Duplicate scan of the same bunch" and listed["dup"]["voided_at"]
+
+    assert storage.unvoid_scans(["dup", "keep"]) == ["dup"]
+    assert storage.analytics_summary(session["id"])["total_scans"] == 2
+    assert storage.get_scan("dup")["voided_at"] is None
+    with storage.connect() as connection:
+        events = connection.execute("SELECT event_type, description FROM system_events WHERE scan_id = 'dup' ORDER BY rowid").fetchall()
+    assert [tuple(row) for row in events] == [
+        ("scan_voided", "Duplicate scan of the same bunch"),
+        ("scan_unvoided", "Counted again; had been voided: Duplicate scan of the same bunch"),
+    ]
 
 
 def test_disputes_zip_sorts_frames_by_corrected_grade(tmp_path: Path) -> None:

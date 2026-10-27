@@ -148,6 +148,18 @@ sudo systemctl daemon-reload && sudo systemctl enable --now banagrade banagrade-
 The backup timer copies `banagrade.db` to `/var/lib/banagrade/backups` every night at 23:30 using
 SQLite's online backup, checks the copy's integrity and row counts, and keeps the newest 14. Run one
 by hand with `sudo systemctl start banagrade-backup` and check it with `journalctl -u banagrade-backup`.
+Only those nightly copies (`banagrade-YYYYMMDD-HHMMSS.db`) are ever pruned; safety copies made by hand
+before a risky change are kept until someone deletes them.
+
+Scans are never deleted from the dashboard: it has no login, and the scan log is the audit trail. To
+leave a scan out of the numbers (a bunch scanned twice, a sheet of paper, a test run), **void** it on
+Recent Scans with a reason. It stays listed, marked Voided, counts nowhere, and can be counted again.
+To wipe test data completely, run this on the Pi and type CLEAR; it saves a verified backup with the
+scans' photos (moved, not deleted) to `/var/lib/banagrade/backups/clear-<time>/` first:
+
+```bash
+sudo -u banagrade /opt/banagrade/.venv/bin/python /opt/banagrade/backend/scripts/clear_scans.py
+```
 
 Every captured frame is saved to `/var/lib/banagrade/frames` (about 0.9 MB each, newest 1,000 kept,
 `BANAGRADE_FRAME_KEEP`). Disputing a scan copies its frame into `/var/lib/banagrade/retrain`, and

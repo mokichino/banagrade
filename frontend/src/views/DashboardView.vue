@@ -13,7 +13,7 @@ import StartShiftDialog from '../components/StartShiftDialog.vue'
 ChartJS.register(ArcElement, DoughnutController, Filler, LineElement, LinearScale, PointElement, Tooltip)
 
 const props = defineProps({ refreshKey: { type: Number, default: 0 } })
-const emit = defineEmits(['navigate', 'dispute', 'select', 'error'])
+const emit = defineEmits(['navigate', 'dispute', 'select', 'void', 'error'])
 // Shared with Recent Scans through App, so both pages show the same shift.
 const scope = defineModel('scope', { type: String, default: 'active' })
 
@@ -192,6 +192,7 @@ defineExpose({ load })
         <p class="volume-foot">
           <span>{{ graded.toLocaleString() }} graded</span>
           <span v-if="count('technical_failure_count')">· {{ plural(count('technical_failure_count'), 'technical failure') }}, not counted in the rates</span>
+          <span v-if="count('voided_count')">· {{ count('voided_count').toLocaleString() }} voided, not counted at all</span>
         </p>
       </article>
       <div class="kpi-grid three">
@@ -253,7 +254,7 @@ defineExpose({ load })
 
     <div class="panel">
       <div class="panel-heading"><div><p class="eyebrow">Recent scans</p><h2>Latest grading results</h2></div><button class="text-button" @click="$emit('navigate', 'history')">View all scans</button></div>
-      <ScanTable :scans="recent" :empty-text="`No scans ${emptyNote}.`" @select="$emit('select', $event)" @dispute="$emit('dispute', $event)" />
+      <ScanTable :scans="recent" :empty-text="`No scans ${emptyNote}.`" @select="$emit('select', $event)" @dispute="$emit('dispute', $event)" @void="$emit('void', $event)" />
     </div>
 
     <StartShiftDialog :open="starting" :current="currentShift(shifts)" @close="starting = false" @started="onShiftStarted" />

@@ -39,9 +39,21 @@ def test_report_prints_section_4_7_numbers(tmp_path, capsys) -> None:
 
 def test_reconciliation_fails_when_dashboard_disagrees(tmp_path, monkeypatch, capsys) -> None:
     db, _ = _db(tmp_path)
-    good = {"total_scans": 4, "class_a_count": 1, "class_b_count": 1, "rejected_count": 1, "technical_failure_count": 1}
+    good = {"total_scans": 4, "class_a_count": 1, "class_b_count": 1, "rejected_count": 1, "technical_failure_count": 1, "voided_count": 0}
     monkeypatch.setattr(shift_report, "fetch", lambda api, path: good)
     assert shift_report.report(db, None, None, api="http://pi") == 0
     monkeypatch.setattr(shift_report, "fetch", lambda api, path: {**good, "class_a_count": 2})
     assert shift_report.report(db, None, None, api="http://pi") == 1
     assert "RECONCILIATION FAILED" in capsys.readouterr().out
+
+
+def test_report_leaves_voided_scans_out_like_the_dashboard(tmp_path, monkeypatch, capsys) -> None:
+    db, session = _db(tmp_path)
+    storage = Storage(db)
+    storage.void_scans(["s0"], "Duplicate scan of the same bunch")
+    summary = storage.analytics_summary(session)
+    monkeypatch.setattr(shift_report, "fetch", lambda api, path: summary)
+    assert shift_report.report(db, None, None, api="http://pi") == 0
+    out = capsys.readouterr().out
+    assert "Scans: 3 · Class A 0 · Class B 1 · Rejected 1 · technical failures 1 · 1 voided, not counted" in out
+    assert "Dashboard totals match SQLite." in out

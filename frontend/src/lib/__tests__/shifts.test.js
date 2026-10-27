@@ -29,6 +29,9 @@ describe('shift labels', () => {
 
   it('lists only past shifts that hold scans', () => {
     expect(pastShifts([NOW, MORNING, EMPTY, NIGHT]).map(shift => shift.id)).toEqual(['m', 'n'])
+    const voidedRun = { ...EMPTY, id: 'v', voided_count: 12 }
+    expect(pastShifts([voidedRun]).map(shift => shift.id)).toEqual(['v'])  // still reachable, to count them again
+    expect(shiftOptionLabel(voidedRun)).toBe('Oct 27, 02:32 – 02:48 · 0 scans · 12 voided')
   })
 
   it('describes the scope for headings, exports and the API', () => {

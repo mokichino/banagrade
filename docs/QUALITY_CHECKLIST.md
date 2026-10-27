@@ -37,9 +37,10 @@ Last updated: 2026-10-25.
 - [x] Use FastAPI endpoints as the only data source. No demo or fabricated totals are shipped.
 - [x] Fixed sidebar and sticky header on desktop; sticky top navigation on phones.
 - [x] LED mirror in the header and sidebar, driven by `led_changed` WebSocket events, with a legend tooltip and reduced-motion support.
-- [x] Dashboard shows the shift processing volume as a hero number, a Class A vs Class B yield doughnut with text labels, and a rejection-rate trend line with interval control.
+- [x] Dashboard shows the shift processing volume as a hero number, a Class A vs Class B yield doughnut with text labels, and a rejection-rate trend line with interval control. The trend sits on a real time axis in the viewer's time zone, breaks where nothing was graded, marks the shift average and has a table view (`lib/trend.js`, `test_storage.py::test_rejection_trend_follows_the_viewers_clock`).
+- [x] Shifts are listed by name or by when they ran, never by the automatic "opened at startup" note; empty past shifts are hidden; a past shift is marked as such with a way back. The Dashboard and Recent Scans share one shift choice. The three grade cards share one denominator (% of graded).
 - [x] Technical failures are excluded from acceptance and rejection rates and shown separately. A technical failure is never shown as "Rejected".
-- [x] Recent Scans: search by Scan ID or timestamp, grade filter, PDF of the filtered rows, CSV export, a dispute button per row.
+- [x] Recent Scans: search by Scan ID or timestamp, shift and grade filters, PDF and CSV of exactly the rows listed, 50 rows per page, empty states that say why, a dispute button per row. The Stage 2 column keeps the scanner's grade when an operator corrects the final grade. Clear all scans is on System Status, away from the everyday controls.
 - [x] System Status card order: camera preview, operational summary, hardware (exactly four components), AI models with path tooltips and Loaded/Missing/Error badges.
 - [x] Backend time-bucket analytics endpoint (`/api/analytics/trend`).
 - [x] Automated Vue logic tests (Vitest): grade labels, Stage 2 N/A rule, confidence formatting, filters, LED mapping, PDF generation.

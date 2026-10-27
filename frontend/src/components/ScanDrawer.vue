@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { failureReason, finalGradeLabel, formatConfidence, formatTimestamp, scanLabel, stage2Label } from '../lib/grades.js'
+import { disputeSummary, failureReason, finalGradeLabel, formatConfidence, formatTimestamp, scanLabel, stage2Label } from '../lib/grades.js'
 
 const props = defineProps({ scan: { type: Object, default: null } })
 defineEmits(['close'])
@@ -18,6 +18,7 @@ const latency = computed(() => (props.scan?.inference_time_ms != null ? `${Math.
       <dl>
         <dt>Captured</dt><dd>{{ formatTimestamp(scan.captured_at) }}</dd>
         <dt>Final grade</dt><dd>{{ finalGradeLabel(scan) }}</dd>
+        <template v-if="scan.disputed"><dt>Disputed</dt><dd>{{ disputeSummary(scan) }}</dd></template>
         <dt>Stage 1</dt><dd>{{ scan.stage1_status || 'N/A' }} · {{ formatConfidence(scan.stage1_confidence) }}</dd>
         <dt>Stage 2</dt><dd>{{ stage2Label(scan) }} · {{ formatConfidence(scan.stage2_confidence) }}</dd>
         <dt>Bbox width</dt><dd>{{ width }}</dd>

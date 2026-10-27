@@ -24,6 +24,8 @@ const refreshKey = ref(0)
 const selectedScan = ref(null)
 const disputeScan = ref(null)
 const powerOpen = ref(false)
+// Which shift the Dashboard and Recent Scans show: 'active', 'all' or a past shift's id. One choice for both pages.
+const scope = ref('active')
 
 const demo = ref({ mode: false, data_present: false })
 async function loadDemoFlag() {
@@ -55,8 +57,8 @@ function onDisputeSaved() {
     <main class="main-content">
       <AppHeader :title="current.label" :subtitle="current.subtitle" :led="led" :connection="connection" :demo="demo.data_present || demo.mode" />
       <div v-if="error" class="alert" role="alert"><span>{{ error }}</span><button class="text-button" aria-label="Dismiss" @click="error = ''">Dismiss</button></div>
-      <DashboardView v-if="activeView === 'dashboard'" :refresh-key="refreshKey" @navigate="navigate" @select="selectedScan = $event" @dispute="disputeScan = $event" @error="error = $event" />
-      <HistoryView v-else-if="activeView === 'history'" :refresh-key="refreshKey" @select="selectedScan = $event" @dispute="disputeScan = $event" @error="error = $event" />
+      <DashboardView v-if="activeView === 'dashboard'" v-model:scope="scope" :refresh-key="refreshKey" @navigate="navigate" @select="selectedScan = $event" @dispute="disputeScan = $event" @error="error = $event" />
+      <HistoryView v-else-if="activeView === 'history'" v-model:scope="scope" :refresh-key="refreshKey" @select="selectedScan = $event" @dispute="disputeScan = $event" @error="error = $event" />
       <SystemStatusView v-else-if="activeView === 'status'" :led="led" @error="error = $event" />
     </main>
     <ScanDrawer :scan="selectedScan" @close="selectedScan = null" />

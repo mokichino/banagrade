@@ -46,7 +46,11 @@ def test_telemetry_and_shift_scoped_analytics(client) -> None:
     assert test_client.get("/api/analytics/summary?session=active").json()["rejected_count"] == 1
     trend = test_client.get("/api/analytics/trend?session=active&bucket_minutes=30").json()
     assert trend["items"][0]["rejection_rate"] == 100.0
-    new = test_client.post("/api/sessions", json={"notes": "afternoon"}).json()
+    daily = test_client.get("/api/analytics/trend?session=active&bucket_minutes=1440&utc_offset_minutes=480").json()
+    assert daily["items"][0]["bucket_start"] == "2026-10-12T16:00:00+00:00"
+    assert test_client.get("/api/analytics/trend?utc_offset_minutes=900").status_code == 422
+    new = test_client.post("/api/sessions", json={"name": "afternoon"}).json()
+    assert (new["name"], new["notes"]) == ("afternoon", "Shift started from dashboard")
     assert test_client.get("/api/analytics/summary?session=active").json()["total_scans"] == 0
     assert test_client.get("/api/sessions/active").json()["session"]["id"] == new["id"]
 
@@ -57,7 +61,7 @@ def test_telemetry_and_shift_scoped_analytics(client) -> None:
     assert "s1" in test_client.get(f"/api/exports/scans.csv?session={session['id']}").text
     assert "s1" not in test_client.get("/api/exports/scans.csv?session=active").text
     shifts = test_client.get("/api/sessions").json()["items"]
-    assert [(shift["notes"], shift["scan_count"]) for shift in shifts][0] == ("afternoon", 0)
+    assert [(shift["name"], shift["scan_count"]) for shift in shifts][0] == ("afternoon", 0)
 
 
 def test_serves_built_dashboard_without_shadowing_api(tmp_path, monkeypatch) -> None:

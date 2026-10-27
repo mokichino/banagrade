@@ -209,6 +209,6 @@ journalctl -u banagrade-backup -n 3 --no-pager
 |---|---|
 | Backup log ends with `ok {...}` and the row counts | |
 | `systemctl list-timers banagrade-backup` shows the next run | |
-| Recent Scans → CSV: row count matches the scan total | |
-| Recent Scans → Download PDF opens and lists the filtered rows | |
+| Recent Scans → Export CSV with All grades: row count matches the shift's scan total | |
+| Recent Scans → Export PDF opens and lists the filtered rows | |
 | System Status → Export disputed frames: zip has the section 4 disputes with frames | |

@@ -96,6 +96,7 @@ fingers yet measure narrow when its fingers curl inward or it has few of them.
 11. ~~**The dispute form makes a no-change dispute easy.**~~ Done: the form opens with no grade chosen,
     refuses the recorded grade (the API refuses it too), and asks for the measured finger length when the
     correction is Class A or Class B.
-12. ~~**Clearing test scans needs a shell.**~~ Done: **Clear all scans** on Recent scans. The operator types
-    CLEAR to confirm; it saves a verified backup to `/var/lib/banagrade/backups/banagrade-before-clear-*.db`,
-    deletes the scans, disputes, events and saved photos, and opens a new shift. Retraining copies are kept.
+12. ~~**Clearing test scans needs a shell.**~~ Done: **Clear all scans** on System Status (Scan records card). The
+    operator types CLEAR to confirm; it saves a verified backup to `/var/lib/banagrade/backups/banagrade-before-clear-*.db`,
+    deletes the scans, disputes, events, saved photos and the shifts left empty, and opens a new shift. Retraining
+    copies are kept.

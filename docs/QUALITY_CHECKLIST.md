@@ -45,7 +45,7 @@ Last updated: 2026-10-25.
 - [x] System Status card order: camera preview, operational summary, hardware (exactly four components), AI models with path tooltips and Loaded/Missing/Error badges.
 - [x] Backend time-bucket analytics endpoint (`/api/analytics/trend`).
 - [x] Automated Vue logic tests (Vitest): grade labels, Stage 2 N/A rule, confidence formatting, filters, LED mapping, PDF generation.
-- [x] Live preview draws the capture trigger's box and status: hold still, touching the edge, scanning, then the held grade in its LED colour. It is drawn on a display copy only and expires after 1 s without a detection (`pipeline.draw_overlay`, `test_pipeline.py::test_preview_draws…`, `test_stability_check_labels…`).
+- [x] Live preview draws the capture trigger's box and status: hold still, touching the left or right edge (top and bottom are allowed, as in the dataset), scanning, then the held grade in its LED colour. It is drawn on a display copy only and expires after 1 s without a detection (`pipeline.draw_overlay`, `test_pipeline.py::test_preview_draws…`, `test_stability_check_labels…`).
 - [x] Component-level rendering tests (`@vue/test-utils` + jsdom) for empty and error states: scan table, every status card, Dashboard, Recent Scans and System Status with the API down (`components/__tests__/states.test.js`).
 - [x] Grade descriptions on the dashboard and LED legend use the pixel rule (width ≥ 2730.07 px) instead of the old 8–12 cm ranges, which the system never measured.
 - [ ] Reconcile dashboard totals against SQLite with production data from a real shift. The tool is ready: `scripts/shift_report.py report` exits non-zero on any mismatch (`test_shift_report.py`). Run it in `ON_SITE_TESTS.md` §7.

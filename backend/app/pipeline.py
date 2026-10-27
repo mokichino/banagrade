@@ -594,8 +594,12 @@ class PresencePipeline:
         current, confidence, source = detection
         height, width = second.shape[:2]
         margin = 2
-        if min(current[0], current[1]) <= margin or current[2] >= width - margin or current[3] >= height - margin:
-            self._show(current, f"Checking {confidence:.2f} ({source}) · touching the edge, move it in", OVERLAY_PROBLEM)
+        # Only the sides: the grade is the box's horizontal width, so a bunch cut off at the left or right is measured
+        # too narrow (an A comes out B). Running off the top or bottom leaves the width whole, and big bunches do it in
+        # 34 of the 336 dataset photos, against 1 at a side.
+        if current[0] <= margin or current[2] >= width - margin:
+            side, way = ("left", "right") if current[0] <= margin else ("right", "left")
+            self._show(current, f"Checking {confidence:.2f} ({source}) · touching the {side} edge, move it {way}", OVERLAY_PROBLEM)
             return False
         if max(abs(a - b) for a, b in zip(first, current)) > max(width, height) * 0.03:
             self._show(current, f"Checking {confidence:.2f} ({source}) · moving, hold still", OVERLAY_CHECKING)

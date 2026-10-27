@@ -144,6 +144,7 @@ nav { display: grid; gap: 3px; }
 /* ---------- Dashboard ---------- */
 .dashboard-toolbar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .shift-meta { margin: 0; flex: 1; font-size: 12px; }
+.shift-actions { display: flex; gap: 8px; }
 .scope-notice { display: flex; align-items: center; gap: 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 8px 8px 8px 14px; background: var(--surface-hover); color: var(--text); font-size: 13px; }
 .scope-notice svg { flex: none; color: var(--text-secondary); }
 .scope-notice span { flex: 1; }

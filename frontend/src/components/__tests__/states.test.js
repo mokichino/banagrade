@@ -414,6 +414,36 @@ describe('views', () => {
     expect(wrapper.find('.scope-notice').exists()).toBe(false)
   })
 
+  it('Dashboard ends the shift only after confirming, then shows its final totals', async () => {
+    const cpu = { mean_c: 50.24, max_c: 53, samples: 41 }
+    const fetch = mockFetch({ '/api/analytics/summary': { ...SUMMARY, cpu_temperature: cpu }, '/api/analytics/trend': { items: [] }, '/api/sessions': { items: SHIFTS }, '/api/inspection/scans': { items: [] }, '/api/sessions/now/close': null })
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    expect(wrapper.find('.shift-meta').text()).toBe('Toril batch · Started Oct 27, 13:30 · CPU 50.2 °C average, 53.0 °C peak')
+
+    await wrapper.findAll('button').find(button => button.text() === 'End shift').trigger('click')
+    const dialog = wrapper.find('[aria-labelledby="end-shift-title"]')
+    expect(dialog.text()).toContain('The shift that started Oct 27, 13:30 ends now')
+    expect(dialog.text()).toContain('3 scans')
+    expect(fetch).not.toHaveBeenCalledWith('/api/sessions/now/close', expect.anything())
+    await dialog.trigger('submit')
+    await flushPromises()
+    expect(fetch).toHaveBeenCalledWith('/api/sessions/now/close', expect.objectContaining({ method: 'POST' }))
+    expect(fetch).toHaveBeenCalledWith('/api/analytics/summary?session=now', expect.anything())
+    expect(wrapper.find('[aria-labelledby="end-shift-title"]').exists()).toBe(false)
+  })
+
+  it('Dashboard says when no shift is open and offers only Start new shift', async () => {
+    const closed = SHIFTS.map(shift => ({ ...shift, status: 'closed', ended_at: shift.ended_at || '2026-10-27T09:00:00Z' }))
+    mockFetch({ '/api/analytics/summary': { total_scans: 0, cpu_temperature: null }, '/api/analytics/trend': { items: [] }, '/api/sessions': { items: closed }, '/api/inspection/scans': { items: [] } })
+    const wrapper = mount(DashboardView)
+    await flushPromises()
+    expect(wrapper.find('.shift-meta').text()).toBe('No shift open. The next bunch scanned starts one.')
+    expect(wrapper.findAll('button').some(button => button.text() === 'End shift')).toBe(false)
+    await wrapper.findAll('button').find(button => button.text() === 'Start new shift').trigger('click')
+    expect(wrapper.find('[aria-labelledby="shift-title"]').text()).toContain('No shift is open.')
+  })
+
   const scan = (id, grade, extra = {}) => ({ scan_id: id, final_grade: grade, processing_status: grade ? 'completed' : 'failed', captured_at: '2026-10-26T19:00:00Z', ...extra })
 
   it('History follows the shared shift and exports exactly the rows listed', async () => {

@@ -1,10 +1,11 @@
 """Thesis §4.7 numbers for one shift, and a reconciliation of the dashboard totals against SQLite.
 
-During the run, sample telemetry once a minute (Ctrl+C to stop):
-    python scripts/shift_report.py sample --out shift_telemetry.csv
-
 After the run (as a user that can read the database, e.g. sudo -u banagrade):
-    python scripts/shift_report.py report --db /var/lib/banagrade/banagrade.db --telemetry shift_telemetry.csv
+    python scripts/shift_report.py report --db /var/lib/banagrade/banagrade.db
+
+The service itself records the CPU temperature once a minute while a shift is open, and `report` reads it from
+the database. `sample` is the older stand-alone sampler (Ctrl+C to stop); pass its CSV with --telemetry to use it:
+    python scripts/shift_report.py sample --out shift_telemetry.csv
 
 `report` uses the open shift, or the newest one when none is open; pass --session to choose.
 It exits non-zero if the dashboard API totals differ from a direct count in SQLite.
@@ -111,6 +112,12 @@ def report(db: Path, session: str | None, telemetry: Path | None, api: str | Non
         uptimes = [float(row["service_uptime_s"]) for row in rows if row["service_uptime_s"]]
         restarts = sum(later < earlier for earlier, later in zip(uptimes, uptimes[1:]))
         print(f"Service restarts during sampling: {restarts}")
+    elif connection.execute("SELECT 1 FROM sqlite_master WHERE name = 'telemetry_samples'").fetchone():
+        # The service records a reading a minute while the shift is open, so no separate sampler is needed.
+        rows = connection.execute("SELECT sampled_at, cpu_temperature_c FROM telemetry_samples WHERE session_id = ? ORDER BY sampled_at", (shift["id"],)).fetchall()
+        temps = [row["cpu_temperature_c"] for row in rows]
+        if temps:
+            print(f"CPU temperature: mean {statistics.mean(temps):.1f} °C · max {max(temps):.1f} °C over {len(temps)} samples ({rows[0]['sampled_at']} to {rows[-1]['sampled_at']})")
 
     if not api:
         return 0

@@ -85,7 +85,19 @@ CREATE TABLE IF NOT EXISTS scan_disputes (
     status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'resolved'))
 );
 CREATE INDEX IF NOT EXISTS idx_scan_disputes_scan_id ON scan_disputes(scan_id);
+CREATE TABLE IF NOT EXISTS telemetry_samples (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sampled_at TEXT NOT NULL,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    cpu_temperature_c REAL NOT NULL,
+    fan_level INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_telemetry_samples_session_id ON telemetry_samples(session_id);
 """
+
+
+# After End shift no shift is open; the next scan opens one, so every scan belongs to a shift.
+SHIFT_FROM_SCAN = "Shift opened by the first scan after the last shift ended"
 
 
 def now_iso() -> str:
@@ -204,7 +216,9 @@ class Storage:
             connection.execute("DELETE FROM system_events")
             connection.executemany("DELETE FROM scans WHERE scan_id = ?", ids)
             connection.execute("UPDATE sessions SET status = 'closed', ended_at = ? WHERE status = 'open'", (now_iso(),))
-            shifts = connection.execute("DELETE FROM sessions WHERE NOT EXISTS (SELECT 1 FROM scans WHERE session_id = sessions.id)").rowcount
+            empty = "SELECT id FROM sessions WHERE NOT EXISTS (SELECT 1 FROM scans WHERE session_id = sessions.id)"
+            connection.execute(f"DELETE FROM telemetry_samples WHERE session_id IN ({empty})")
+            shifts = connection.execute(f"DELETE FROM sessions WHERE id IN ({empty})").rowcount
         frames = [path for _, refs in backed_up if refs for path in (json.loads(refs) if refs.startswith("[") else [refs])]
         moved = 0
         for frame in map(Path, frames):
@@ -392,8 +406,26 @@ class Storage:
         session = self.active_session()
         return session["id"] if session else None
 
-    def ensure_active_session(self) -> dict[str, Any]:
-        return self.active_session() or self.create_session("Shift opened automatically at startup")
+    def ensure_active_session(self, notes: str = "Shift opened automatically at startup") -> dict[str, Any]:
+        return self.active_session() or self.create_session(notes)
+
+    def record_temperature(self, session_id: str, cpu_temperature_c: float, fan_level: int | None) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                "INSERT INTO telemetry_samples (sampled_at, session_id, cpu_temperature_c, fan_level) VALUES (?, ?, ?, ?)",
+                (now_iso(), session_id, cpu_temperature_c, fan_level),
+            )
+
+    def temperature_summary(self, session_id: str | None = None) -> dict[str, Any] | None:
+        """CPU temperature over the minute readings taken while the shift was open, or None if there are none."""
+        query = "SELECT AVG(cpu_temperature_c), MAX(cpu_temperature_c), COUNT(*), MIN(sampled_at), MAX(sampled_at) FROM telemetry_samples"
+        with self.connect() as connection:
+            mean, peak, samples, first, last = connection.execute(
+                query + (" WHERE session_id = ?" if session_id else ""), (session_id,) if session_id else ()
+            ).fetchone()
+        if not samples:
+            return None
+        return {"mean_c": round(mean, 1), "max_c": peak, "samples": samples, "first_at": first, "last_at": last}
 
     def _graded_rows(self, session_id: str | None) -> list[sqlite3.Row]:
         query = "SELECT captured_at, final_grade, processing_status, inference_time_ms, voided_at FROM scans"
@@ -427,6 +459,7 @@ class Storage:
             "class_a_share_of_accepted": round(class_a / accepted * 100, 2) if accepted else 0,
             "rejection_rate": round(rejected / graded * 100, 2) if graded else 0,
             "average_inference_latency_ms": round(sum(latencies) / len(latencies), 2) if latencies else None,
+            "cpu_temperature": self.temperature_summary(session_id),
         }
 
     def rejection_trend(self, session_id: str | None = None, bucket_minutes: int = 15, utc_offset_minutes: int = 0) -> list[dict[str, Any]]:

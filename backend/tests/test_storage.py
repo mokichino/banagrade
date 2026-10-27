@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from app.storage import Storage, disputes_zip, now_iso
+from app.storage import SHIFT_FROM_SCAN, Storage, disputes_zip, now_iso
 
 
 def _scan(scan_id: str, session_id: str | None, grade: str | None, captured_at: str | None = None, **extra) -> dict:
@@ -187,6 +187,7 @@ def test_clear_scans_backs_up_then_deletes_records_and_frames(tmp_path: Path) ->
     storage.save_scan(_scan("a", session["id"], "Class A", image_refs=[str(frame)]))
     storage.save_scan(_scan("b", session["id"], "Class B", image_refs=[str(elsewhere)]))
     dispute = storage.dispute_scan("a", "Middle finger 11 cm", "Class B", tmp_path / "retrain")
+    storage.record_temperature(session["id"], 51.0, 1)  # goes with its shift, not in the way of deleting it
 
     result = storage.clear_scans(tmp_path / "backups", frames)
 
@@ -206,6 +207,34 @@ def test_clear_scans_backs_up_then_deletes_records_and_frames(tmp_path: Path) ->
     assert [row["id"] for row in storage.list_sessions()] == [active["id"]]
     with sqlite3.connect(folder / "banagrade.db") as backup:
         assert backup.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 2
+        assert backup.execute("SELECT COUNT(*) FROM telemetry_samples").fetchone()[0] == 1
+    assert storage.temperature_summary() is None
+
+
+def test_cpu_temperature_is_summarised_per_shift(tmp_path: Path) -> None:
+    storage = Storage(tmp_path / "banagrade.db")
+    storage.initialize()
+    morning = storage.create_session("Shift")
+    assert storage.analytics_summary(morning["id"])["cpu_temperature"] is None
+    for reading in (48.0, 52.5, 50.1):
+        storage.record_temperature(morning["id"], reading, 0)
+    storage.close_session(morning["id"])
+    afternoon = storage.create_session("Shift")
+    storage.record_temperature(afternoon["id"], 60.0, 2)
+
+    summary = storage.analytics_summary(morning["id"])["cpu_temperature"]
+    assert (summary["mean_c"], summary["max_c"], summary["samples"]) == (50.2, 52.5, 3)
+    assert storage.temperature_summary()["samples"] == 4
+
+
+def test_a_scan_after_end_shift_opens_a_new_shift(tmp_path: Path) -> None:
+    storage = Storage(tmp_path / "banagrade.db")
+    storage.initialize()
+    ended = storage.ensure_active_session()
+    storage.close_session(ended["id"])
+    assert storage.active_session() is None
+    opened = storage.ensure_active_session(SHIFT_FROM_SCAN)
+    assert (opened["notes"], opened["status"]) == (SHIFT_FROM_SCAN, "open") and opened["id"] != ended["id"]
 
 
 def test_voided_scans_stay_listed_but_count_nowhere(tmp_path: Path) -> None:

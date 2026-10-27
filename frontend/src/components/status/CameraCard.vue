@@ -25,8 +25,9 @@ async function openSnapshot() {
   }
 }
 // Placement guide in 4608x2592 frame coordinates, from the app's Stage 2 boxes on the 336 dataset photos:
-// median bunch box 2648 x 1789 px centred at (2222, 1386). The edge strip is where a bunch gets refused or cut off.
-const GUIDE = { width: 4608, height: 2592, box: { x: 898, y: 492, width: 2648, height: 1789 }, centre: { x: 2222, y: 1386 }, edge: { x: 115, y: 65 } }
+// median bunch box 2648 x 1789 px centred at (2222, 1386). The side strips are where a bunch gets refused: its width
+// would be cut off. Top and bottom are not marked; big bunches run off them in the dataset too.
+const GUIDE = { width: 4608, height: 2592, box: { x: 898, y: 492, width: 2648, height: 1789 }, centre: { x: 2222, y: 1386 }, side: 115 }
 const guideKey = 'banagrade.cameraGuide'
 const showGuide = ref(readGuide())
 function readGuide() {
@@ -143,7 +144,7 @@ const focus = computed(() => {
         <img :src="streamSrc" alt="Live top-down camera preview of the inspection zone" @error="streamError = true">
         <svg v-if="showGuide || alignment" class="placement-guide" :viewBox="`0 0 ${GUIDE.width} ${GUIDE.height}`" preserveAspectRatio="none" aria-hidden="true">
           <g v-if="showGuide">
-            <path class="guide-edge" fill-rule="evenodd" :d="`M0 0H${GUIDE.width}V${GUIDE.height}H0Z M${GUIDE.edge.x} ${GUIDE.edge.y}V${GUIDE.height - GUIDE.edge.y}H${GUIDE.width - GUIDE.edge.x}V${GUIDE.edge.y}Z`" />
+            <path class="guide-edge" :d="`M0 0H${GUIDE.side}V${GUIDE.height}H0Z M${GUIDE.width - GUIDE.side} 0H${GUIDE.width}V${GUIDE.height}H${GUIDE.width - GUIDE.side}Z`" />
             <rect class="guide-box" v-bind="GUIDE.box" rx="40" />
             <path class="guide-cross" :d="`M${GUIDE.centre.x - 120} ${GUIDE.centre.y}h240M${GUIDE.centre.x} ${GUIDE.centre.y - 120}v240`" />
           </g>
@@ -151,7 +152,7 @@ const focus = computed(() => {
         </svg>
       </div>
       <div v-else class="camera-offline"><strong>Camera unavailable</strong><span>{{ pipeline?.last_error || 'The edge device has not opened the camera.' }}</span></div>
-      <span class="preview-tag">Full camera view · box = what the capture trigger sees<template v-if="showGuide"> · dashed = typical bunch, centre it on the cross · keep out of the red edge</template></span>
+      <span class="preview-tag">Full camera view · box = what the capture trigger sees<template v-if="showGuide"> · dashed = typical bunch, centre it on the cross · keep the tips off the red sides</template></span>
       <button v-if="expanded" class="preview-exit secondary-button" @click="toggleExpanded">Exit full screen</button>
     </div>
     <div class="camera-actions">

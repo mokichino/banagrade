@@ -5,6 +5,7 @@ import { Doughnut, Line } from 'vue-chartjs'
 import { request } from '../composables/useApi.js'
 import { formatTimestamp } from '../lib/grades.js'
 import ScanTable from '../components/ScanTable.vue'
+import ShiftSelect from '../components/ShiftSelect.vue'
 
 ChartJS.register(ArcElement, CategoryScale, DoughnutController, Filler, LineElement, LinearScale, PointElement, Tooltip)
 
@@ -16,12 +17,15 @@ const scope = ref('active')
 const bucketMinutes = ref(15)
 const summary = ref({})
 const trend = ref([])
-const session = ref(null)
+const shifts = ref([])
 const recent = ref([])
 const loading = ref(true)
 const shiftBusy = ref(false)
+const naming = ref(false)
+const shiftName = ref('')
 
-const scopeQuery = computed(() => (scope.value === 'active' ? '?session=active' : ''))
+const scopeQuery = computed(() => (scope.value === 'all' ? '' : `?session=${encodeURIComponent(scope.value)}`))
+const shown = computed(() => shifts.value.find(shift => (scope.value === 'active' ? shift.status === 'open' : shift.id === scope.value)))
 const accepted = computed(() => (summary.value.class_a_count || 0) + (summary.value.class_b_count || 0))
 const sharePct = n => (accepted.value ? Math.round((n / accepted.value) * 1000) / 10 : 0)
 
@@ -80,15 +84,15 @@ const trendOptions = {
 
 async function load() {
   try {
-    const [summaryData, trendData, sessionData, scanData] = await Promise.all([
+    const [summaryData, trendData, shiftData, scanData] = await Promise.all([
       request(`/api/analytics/summary${scopeQuery.value}`),
       request(`/api/analytics/trend${scopeQuery.value ? scopeQuery.value + '&' : '?'}bucket_minutes=${bucketMinutes.value}`),
-      request('/api/sessions/active'),
-      request('/api/inspection/scans?limit=8')
+      request('/api/sessions'),
+      request(`/api/inspection/scans${scopeQuery.value ? scopeQuery.value + '&' : '?'}limit=8`)
     ])
     summary.value = summaryData
     trend.value = trendData.items
-    session.value = sessionData.session
+    shifts.value = shiftData.items
     recent.value = scanData.items
   } catch (error) {
     emit('error', `Dashboard data unavailable: ${error.message}`)
@@ -100,7 +104,9 @@ async function load() {
 async function startNewShift() {
   shiftBusy.value = true
   try {
-    await request('/api/sessions', { method: 'POST', body: JSON.stringify({ notes: 'Shift started from dashboard' }) })
+    await request('/api/sessions', { method: 'POST', body: JSON.stringify({ notes: shiftName.value.trim() || 'Shift started from dashboard' }) })
+    naming.value = false
+    shiftName.value = ''
     scope.value = 'active'
     await load()
   } catch (error) { emit('error', `Unable to start shift: ${error.message}`) } finally { shiftBusy.value = false }
@@ -115,19 +121,23 @@ defineExpose({ load })
 <template>
   <section class="content-grid">
     <div class="dashboard-toolbar">
-      <div class="segmented" role="group" aria-label="Analytics scope">
-        <button :class="{ active: scope === 'active' }" @click="scope = 'active'">Current shift</button>
-        <button :class="{ active: scope === 'all' }" @click="scope = 'all'">All time</button>
-      </div>
-      <p class="muted shift-meta" v-if="session">Shift started {{ formatTimestamp(session.started_at) }}</p>
-      <button class="secondary-button" :disabled="shiftBusy" @click="startNewShift">{{ shiftBusy ? 'Starting…' : 'Start new shift' }}</button>
+      <label class="inline-select">Showing <ShiftSelect v-model="scope" :shifts="shifts" /></label>
+      <p class="muted shift-meta">
+        <template v-if="shown"><b>{{ shown.notes || 'Unnamed shift' }}</b> · started {{ formatTimestamp(shown.started_at) }}<template v-if="shown.ended_at"> · ended {{ formatTimestamp(shown.ended_at) }}</template></template>
+      </p>
+      <form v-if="naming" class="shift-form" @submit.prevent="startNewShift">
+        <input v-model="shiftName" aria-label="New shift name" placeholder="Name, e.g. Toril batch" maxlength="500" autofocus>
+        <button class="primary-button" :disabled="shiftBusy">{{ shiftBusy ? 'Starting…' : 'Start' }}</button>
+        <button type="button" class="secondary-button" @click="naming = false">Cancel</button>
+      </form>
+      <button v-else class="secondary-button" @click="naming = true">Start new shift</button>
     </div>
 
     <div class="volume-row">
       <article class="panel volume-card">
         <p class="eyebrow">Session processing volume</p>
         <strong class="hero-number">{{ loading ? '—' : (summary.total_scans ?? 0).toLocaleString() }}</strong>
-        <p class="muted">Cardava bunches scanned {{ scope === 'active' ? 'this shift' : 'in total' }}</p>
+        <p class="muted">Cardava bunches scanned {{ scope === 'all' ? 'in total' : 'this shift' }}</p>
         <p class="volume-foot"><span>{{ summary.total_completed_scans ?? 0 }} graded</span><span v-if="summary.technical_failure_count">· {{ summary.technical_failure_count }} technical failure{{ summary.technical_failure_count === 1 ? '' : 's' }} (excluded from rates)</span></p>
       </article>
       <div class="kpi-grid three">

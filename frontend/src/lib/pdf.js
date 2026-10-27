@@ -4,13 +4,13 @@ import { WIDTH_THRESHOLD_PX, failureReason, finalGradeLabel, formatConfidence, f
 
 const FILLS = { 'Class A': [255, 241, 196], 'Class B': [219, 234, 254], Rejected: [254, 226, 226] }
 
-export function buildScansPdf(scans, { filter = 'All', search = '', generated = new Date() } = {}) {
+export function buildScansPdf(scans, { filter = 'All', search = '', shift = 'All shifts', generated = new Date() } = {}) {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' })
   doc.setFontSize(15)
   doc.text('Banagrade AI Sorting System — Scan Audit Log', 40, 44)
   doc.setFontSize(9)
   doc.setTextColor(90)
-  doc.text(`Generated ${formatTimestamp(generated.toISOString())} · ${scans.length} records · Filter: ${filter}${search ? ` · Search: "${search}"` : ''}`, 40, 62)
+  doc.text(`Generated ${formatTimestamp(generated.toISOString())} · ${scans.length} records · Shift: ${shift} · Filter: ${filter}${search ? ` · Search: "${search}"` : ''}`, 40, 62)
   doc.text(`Stage 1: stage1_best.pt (YOLO11n-cls) · Stage 2: stage2_best.pt (YOLO11n) · Class A when bbox width ≥ ${WIDTH_THRESHOLD_PX} px (4608×2592 frame)`, 40, 76)
   autoTable(doc, {
     startY: 90,

@@ -159,6 +159,50 @@ class Storage:
                 connection.execute("UPDATE scans SET final_grade = ? WHERE scan_id = ?", (stored_grade, scan_id))
         return {"id": dispute_id, "scan_id": scan_id, "reason": reason, "corrected_grade": corrected_grade, "original_grade": original_grade, "archived_frames": archived}
 
+    def clear_scans(self, backup_dir: Path, frame_dir: Path) -> dict[str, Any]:
+        """Verified backup first, then delete all scans, disputes, events and frames and open a new shift.
+
+        Retraining copies of disputed frames are kept: they are training data, not scan records.
+        """
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        target = backup_dir / f"banagrade-before-clear-{datetime.now():%Y%m%d-%H%M%S}.db"
+        tables = ("sessions", "scans", "scan_disputes")
+        source = self.connect()
+        copy = sqlite3.connect(target)
+        try:
+            # One read transaction, so the counts come from the same WAL snapshot that was copied.
+            source.execute("BEGIN")
+            expected = {table: source.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in tables}
+            source.backup(copy)
+            source.rollback()
+            integrity = copy.execute("PRAGMA integrity_check").fetchone()[0]
+            actual = {table: copy.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in tables}
+            if integrity != "ok" or actual != expected:
+                raise RuntimeError(f"backup verification failed (integrity={integrity}, expected {expected}, got {actual})")
+            backed_up = copy.execute("SELECT scan_id, image_refs FROM scans").fetchall()
+        except BaseException:
+            target.unlink(missing_ok=True)
+            raise
+        finally:
+            copy.close()
+            source.close()
+        # Delete only what the backup holds, so a scan saved meanwhile is kept rather than lost.
+        ids = [(scan_id,) for scan_id, _ in backed_up]
+        with self.connect() as connection:
+            connection.executemany("DELETE FROM scan_disputes WHERE scan_id = ?", ids)
+            connection.execute("DELETE FROM system_events")
+            connection.executemany("DELETE FROM scans WHERE scan_id = ?", ids)
+            connection.execute("UPDATE sessions SET status = 'closed', ended_at = ? WHERE status = 'open'", (now_iso(),))
+        frames = [path for _, refs in backed_up if refs for path in (json.loads(refs) if refs.startswith("[") else [refs])]
+        removed = 0
+        for frame in map(Path, frames):
+            # Only frames the scanner saved; a stray reference elsewhere is left alone.
+            if frame.parent == frame_dir and frame.is_file():
+                frame.unlink()
+                removed += 1
+        session = self.create_session("Shift opened after clearing scans")
+        return {"backup": str(target), "scans": expected["scans"], "disputes": expected["scan_disputes"], "frames": removed, "session_id": session["id"]}
+
     def scan_disputes(self, scan_id: str) -> list[dict[str, Any]]:
         with self.connect() as connection:
             rows = connection.execute(
@@ -167,32 +211,24 @@ class Storage:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def delete_dispute(self, scan_id: str, dispute_id: str) -> dict[str, Any]:
-        """Remove one dispute and put the grade back to the latest remaining correction, or to the model's grade."""
+    def delete_disputes(self, scan_id: str) -> dict[str, Any]:
+        """Remove every dispute of a scan and put the grade back to the one the scanner gave."""
         with self.connect() as connection:
-            dispute = connection.execute("SELECT * FROM scan_disputes WHERE id = ? AND scan_id = ?", (dispute_id, scan_id)).fetchone()
-            if dispute is None:
-                raise KeyError(dispute_id)
-            model = connection.execute(
-                "SELECT original_grade FROM scan_disputes WHERE scan_id = ? AND original_grade IS NOT NULL ORDER BY created_at, rowid LIMIT 1",
+            disputes = connection.execute(
+                "SELECT original_grade, archived_frames FROM scan_disputes WHERE scan_id = ? ORDER BY created_at, rowid",
                 (scan_id,),
-            ).fetchone()
-            connection.execute("DELETE FROM scan_disputes WHERE id = ?", (dispute_id,))
-            latest = connection.execute(
-                "SELECT corrected_grade FROM scan_disputes WHERE scan_id = ? AND corrected_grade IS NOT NULL ORDER BY created_at DESC, rowid DESC LIMIT 1",
-                (scan_id,),
-            ).fetchone()
-            remaining = connection.execute("SELECT COUNT(*) FROM scan_disputes WHERE scan_id = ?", (scan_id,)).fetchone()[0]
+            ).fetchall()
+            if not disputes:
+                raise KeyError(scan_id)
             # Disputes saved before original_grade existed have no model grade; leave final_grade alone then.
-            grade = latest["corrected_grade"] if latest else model["original_grade"] if model else None
+            grade = next((row["original_grade"] for row in disputes if row["original_grade"]), None)
+            connection.execute("DELETE FROM scan_disputes WHERE scan_id = ?", (scan_id,))
             if grade:
                 connection.execute("UPDATE scans SET final_grade = ? WHERE scan_id = ?", (None if grade == "Technical Failure" else grade, scan_id))
             final_grade = connection.execute("SELECT final_grade FROM scans WHERE scan_id = ?", (scan_id,)).fetchone()["final_grade"]
-        # Every dispute of a scan archives to the same file names, so keep them while another dispute remains.
-        if not remaining:
-            for frame in json.loads(dispute["archived_frames"] or "[]"):
-                Path(frame).unlink(missing_ok=True)
-        return {"id": dispute_id, "scan_id": scan_id, "final_grade": final_grade, "remaining_disputes": remaining}
+        for frame in {frame for row in disputes for frame in json.loads(row["archived_frames"] or "[]")}:
+            Path(frame).unlink(missing_ok=True)
+        return {"scan_id": scan_id, "final_grade": final_grade, "deleted_disputes": len(disputes)}
 
     def disputed_scans(self) -> list[dict[str, Any]]:
         """One row per disputed scan: the model's grade, the latest operator correction, and archived frames."""
@@ -264,16 +300,17 @@ class Storage:
             )
         return record
 
-    def list_scans(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    def list_scans(self, limit: int = 50, offset: int = 0, session_id: str | None = None) -> list[dict[str, Any]]:
+        where = "WHERE s.session_id = ?" if session_id else ""
         with self.connect() as connection:
             rows = connection.execute(
-                """
+                f"""
                 SELECT s.*, EXISTS (SELECT 1 FROM scan_disputes d WHERE d.scan_id = s.scan_id) AS disputed,
                        (SELECT original_grade FROM scan_disputes d WHERE d.scan_id = s.scan_id AND original_grade IS NOT NULL ORDER BY created_at, rowid LIMIT 1) AS model_grade,
                        (SELECT reason FROM scan_disputes d WHERE d.scan_id = s.scan_id ORDER BY created_at DESC, rowid DESC LIMIT 1) AS dispute_reason
-                FROM scans s ORDER BY s.captured_at DESC LIMIT ? OFFSET ?
+                FROM scans s {where} ORDER BY s.captured_at DESC LIMIT ? OFFSET ?
                 """,
-                (limit, offset),
+                (session_id, limit, offset) if session_id else (limit, offset),
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -281,6 +318,13 @@ class Storage:
         with self.connect() as connection:
             row = connection.execute("SELECT * FROM scans WHERE scan_id = ?", (scan_id,)).fetchone()
         return dict(row) if row else None
+
+    def list_sessions(self) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT s.*, (SELECT COUNT(*) FROM scans WHERE session_id = s.id) AS scan_count FROM sessions s ORDER BY started_at DESC, rowid DESC"
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def active_session(self) -> dict[str, Any] | None:
         with self.connect() as connection:

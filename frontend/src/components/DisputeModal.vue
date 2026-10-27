@@ -1,19 +1,25 @@
 <script setup>
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { request } from '../composables/useApi.js'
-import { finalGradeLabel, formatTimestamp, scanLabel } from '../lib/grades.js'
+import { formatTimestamp, scanLabel } from '../lib/grades.js'
 
 const props = defineProps({ scan: { type: Object, default: null } })
 const emit = defineEmits(['close', 'saved', 'changed', 'error'])
 const correctedGrade = ref('')
 const reason = ref('')
 const saving = ref(false)
+// The recorded grade in the form's own terms: a null final_grade is 'Technical Failure'.
 const recorded = ref(null)
 const disputes = ref([])
-const confirmingId = ref(null)
-const deletingId = ref(null)
+const confirming = ref(false)
+const deleting = ref(false)
 
 const gradeName = grade => (grade === 'Technical Failure' || !grade ? 'Technical failure' : grade)
+const unchanged = computed(() => correctedGrade.value === recorded.value)
+const sizeCorrection = computed(() => !unchanged.value && ['Class A', 'Class B'].includes(correctedGrade.value))
+// Disputes come newest first; the oldest one holds the grade the scanner gave.
+const scannerGrade = computed(() => disputes.value.findLast(dispute => dispute.original_grade)?.original_grade)
+const reasonExample = computed(() => (sizeCorrection.value ? `${correctedGrade.value} by size: middle finger 12.5 cm, outer curve, tip to stalk joint` : 'Describe why the grade is incorrect'))
 
 async function loadDisputes(scanId) {
   try {
@@ -22,11 +28,11 @@ async function loadDisputes(scanId) {
 }
 
 watch(() => props.scan, scan => {
-  correctedGrade.value = scan?.final_grade || 'Rejected'
+  correctedGrade.value = ''
   reason.value = ''
-  recorded.value = scan ? finalGradeLabel(scan) : null
+  recorded.value = scan ? scan.final_grade || 'Technical Failure' : null
   disputes.value = []
-  confirmingId.value = null
+  confirming.value = false
   if (scan) loadDisputes(scan.scan_id)
 })
 
@@ -38,16 +44,16 @@ async function submit() {
   } catch (error) { emit('error', `Unable to save dispute: ${error.message}`) } finally { saving.value = false }
 }
 
-async function deleteDispute(dispute) {
-  deletingId.value = dispute.id
+async function deleteDisputes() {
+  deleting.value = true
   try {
-    const result = await request(`/api/inspection/scans/${props.scan.scan_id}/disputes/${dispute.id}`, { method: 'DELETE' })
-    recorded.value = gradeName(result.final_grade)
-    correctedGrade.value = result.final_grade || 'Rejected'
-    confirmingId.value = null
-    await loadDisputes(props.scan.scan_id)
+    const result = await request(`/api/inspection/scans/${props.scan.scan_id}/disputes`, { method: 'DELETE' })
+    recorded.value = result.final_grade || 'Technical Failure'
+    correctedGrade.value = ''
+    confirming.value = false
+    disputes.value = []
     emit('changed')
-  } catch (error) { emit('error', `Unable to delete dispute: ${error.message}`) } finally { deletingId.value = null }
+  } catch (error) { emit('error', `Unable to delete disputes: ${error.message}`) } finally { deleting.value = false }
 }
 </script>
 
@@ -57,33 +63,36 @@ async function deleteDispute(dispute) {
       <button type="button" class="close-button" aria-label="Close" @click="$emit('close')">×</button>
       <p class="eyebrow">Operator correction</p>
       <h2 id="dispute-title">Dispute grade</h2>
-      <p class="muted">{{ scanLabel(scan.scan_id) }} · Recorded: {{ recorded }}</p>
+      <p class="muted">{{ scanLabel(scan.scan_id) }} · Recorded: {{ gradeName(recorded) }}</p>
       <label>Correct grade
-        <select v-model="correctedGrade"><option>Class A</option><option>Class B</option><option>Rejected</option><option>Technical Failure</option></select>
+        <select v-model="correctedGrade" required><option value="" disabled>Choose the correct grade</option><option>Class A</option><option>Class B</option><option>Rejected</option><option>Technical Failure</option></select>
       </label>
-      <label>Reason<textarea v-model="reason" required placeholder="Describe why the grade is incorrect"></textarea></label>
+      <p v-if="unchanged" class="form-error">This scan is already recorded as {{ gradeName(recorded) }}. Choose a different grade.</p>
+      <p v-else-if="sizeCorrection" class="form-hint">Give the measured finger length: the middle finger of the outer row, along its outer curve, from the tip to where the stalk joins. Class A is 12 cm or more.</p>
+      <label>Reason<textarea v-model="reason" required :placeholder="reasonExample"></textarea></label>
       <div class="modal-actions">
         <button type="button" class="secondary-button" @click="$emit('close')">Cancel</button>
-        <button class="primary-button" :disabled="saving">{{ saving ? 'Saving…' : 'Save correction' }}</button>
+        <button class="primary-button" :disabled="saving || !correctedGrade || unchanged">{{ saving ? 'Saving…' : 'Save correction' }}</button>
       </div>
 
       <section v-if="disputes.length" class="dispute-history" aria-label="Earlier disputes">
-        <h3>Earlier disputes ({{ disputes.length }})</h3>
+        <div class="dispute-history-heading">
+          <h3>Earlier disputes ({{ disputes.length }})</h3>
+          <button v-if="!confirming" type="button" class="text-button dispute-button" @click="confirming = true">Delete disputes</button>
+        </div>
+        <div v-if="confirming" class="dispute-confirm">
+          <span v-if="scannerGrade">Delete {{ disputes.length === 1 ? 'this dispute' : `all ${disputes.length} disputes` }}? The grade goes back to {{ gradeName(scannerGrade) }}, the scanner's own grade.</span>
+          <span v-else>Delete {{ disputes.length === 1 ? 'this dispute' : `all ${disputes.length} disputes` }}? The grade stays {{ gradeName(recorded) }}: these disputes are too old to know the scanner's grade.</span>
+          <button type="button" class="text-button dispute-button" :disabled="deleting" @click="deleteDisputes">{{ deleting ? 'Deleting…' : 'Delete' }}</button>
+          <button type="button" class="text-button" @click="confirming = false">Keep</button>
+        </div>
         <ul>
           <li v-for="dispute in disputes" :key="dispute.id">
             <div class="dispute-body">
               <strong>{{ gradeName(dispute.original_grade) }} → {{ dispute.corrected_grade ? gradeName(dispute.corrected_grade) : 'no grade change' }}</strong>
               <small class="tabular">{{ formatTimestamp(dispute.created_at) }}</small>
               <p v-if="dispute.reason">{{ dispute.reason }}</p>
-              <div v-if="confirmingId === dispute.id" class="dispute-confirm">
-                <span>Delete this dispute? The grade goes back to the one before it.</span>
-                <button type="button" class="text-button dispute-button" :disabled="deletingId === dispute.id" @click="deleteDispute(dispute)">{{ deletingId === dispute.id ? 'Deleting…' : 'Delete' }}</button>
-                <button type="button" class="text-button" @click="confirmingId = null">Keep</button>
-              </div>
             </div>
-            <button v-if="confirmingId !== dispute.id" type="button" class="icon-button delete-button" title="Delete dispute" aria-label="Delete dispute" @click="confirmingId = dispute.id">
-              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /></svg>
-            </button>
           </li>
         </ul>
       </section>

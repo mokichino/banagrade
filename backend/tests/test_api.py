@@ -1,5 +1,6 @@
 import os
 import time
+from pathlib import Path
 
 import pytest
 
@@ -48,6 +49,15 @@ def test_telemetry_and_shift_scoped_analytics(client) -> None:
     new = test_client.post("/api/sessions", json={"notes": "afternoon"}).json()
     assert test_client.get("/api/analytics/summary?session=active").json()["total_scans"] == 0
     assert test_client.get("/api/sessions/active").json()["session"]["id"] == new["id"]
+
+    # A past shift stays viewable by its id.
+    assert [scan["scan_id"] for scan in test_client.get(f"/api/inspection/scans?session={session['id']}").json()["items"]] == ["s1"]
+    assert test_client.get("/api/inspection/scans?session=active").json()["items"] == []
+    assert test_client.get(f"/api/analytics/summary?session={session['id']}").json()["rejected_count"] == 1
+    assert "s1" in test_client.get(f"/api/exports/scans.csv?session={session['id']}").text
+    assert "s1" not in test_client.get("/api/exports/scans.csv?session=active").text
+    shifts = test_client.get("/api/sessions").json()["items"]
+    assert [(shift["notes"], shift["scan_count"]) for shift in shifts][0] == ("afternoon", 0)
 
 
 def test_serves_built_dashboard_without_shadowing_api(tmp_path, monkeypatch) -> None:
@@ -110,9 +120,31 @@ def test_dispute_export_zip(client, tmp_path, monkeypatch) -> None:
 
     [listed] = test_client.get("/api/inspection/scans/z1/disputes").json()["items"]
     assert listed["id"] == dispute["id"]
-    deleted = test_client.delete(f"/api/inspection/scans/z1/disputes/{dispute['id']}")
+    deleted = test_client.delete("/api/inspection/scans/z1/disputes")
     assert deleted.json()["final_grade"] == "Class A"
-    assert test_client.delete(f"/api/inspection/scans/z1/disputes/{dispute['id']}").status_code == 404
+    assert test_client.delete("/api/inspection/scans/z1/disputes").status_code == 404
+
+
+def test_dispute_refuses_the_recorded_grade(client) -> None:
+    test_client, api = client
+    api.storage.save_scan({"scan_id": "n1", "captured_at": "2026-10-25T08:00:00+00:00", "final_grade": None, "processing_status": "failed"})
+    response = test_client.post("/api/inspection/scans/n1/dispute", json={"corrected_grade": "Technical Failure", "reason": "same"})
+    assert response.status_code == 400
+    assert "already recorded as Technical Failure" in response.json()["detail"]
+    assert test_client.post("/api/inspection/scans/missing/dispute", json={"corrected_grade": "Class A"}).status_code == 404
+    assert api.storage.scan_disputes("n1") == []
+
+
+def test_clear_scans_needs_confirmation(client, tmp_path, monkeypatch) -> None:
+    test_client, api = client
+    monkeypatch.setenv("BANAGRADE_BACKUP_DIR", str(tmp_path / "backups"))
+    api.storage.save_scan({"scan_id": "c1", "captured_at": "2026-10-25T08:00:00+00:00", "final_grade": "Class A", "processing_status": "completed"})
+    assert test_client.post("/api/inspection/scans/clear", json={"confirm": "yes"}).status_code == 422
+    assert len(api.storage.list_scans()) == 1
+
+    result = test_client.post("/api/inspection/scans/clear", json={"confirm": "CLEAR"}).json()
+    assert result["scans"] == 1 and Path(result["backup"]).parent == tmp_path / "backups"
+    assert api.storage.list_scans() == []
 
 
 def test_csv_export_round_trips_every_stored_value(client) -> None:

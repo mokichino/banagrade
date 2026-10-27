@@ -80,17 +80,22 @@ fingers yet measure narrow when its fingers curl inward or it has few of them.
 ## Records and the dashboard
 
 10. **Disputes to review from the 27 Oct run.**
-    - #SCN-F7DBAD, #SCN-EC7458 and #SCN-E0C181 were saved with the same grade as recorded (B → B) although
-      the reasons describe rejects. Re-dispute them with the intended grade.
-    - The six B → A disputes (#SCN-27A785, C0EBB5, 9A27FE, 026F46, 6C6E3C, 7CE262) only say "thick, full
-      fingers". Add the measured finger length, and re-check #SCN-9A27FE (2164 px) and #SCN-026F46 (2246 px),
-      which are narrower than every Class B of the run.
+    - ~~#SCN-F7DBAD, #SCN-EC7458 and #SCN-E0C181 were saved with the same grade as recorded (B → B) although
+      the reasons describe rejects. Re-dispute them with the intended grade.~~ Done: all three are Rejected.
+    - The B → A disputes only said "thick, full fingers": #SCN-27A785, C0EBB5, 9A27FE, 026F46, 6C6E3C and
+      7CE262, and later 9A99AD, 4354A1, 55E967 and E66775. Each now carries a "middle finger 12.0 cm" entry,
+      but the operator says some measured over 13 cm, so those entries are placeholders. For each bunch,
+      delete the placeholder (Delete disputes in the dispute form, which puts the grade back to Class B) and dispute
+      again with the real length; under 12 cm stays Class B. #SCN-16F36F (Class A, 9 px over the cutoff)
+      has the same placeholder. #SCN-2A9E22 is done: middle finger 12.0 cm, finger width 4 cm, Class A.
+      Finger width does not count; only length decides A or B.
     - Overripe bunches were graded both ways (some Rejected for "black patches and over ripe", some kept as
       Class A with similar damage). Apply one rule: grade overripe-but-intact fruit by measured size and note
-      the ripeness, and reserve Rejected for disease, rot, broken or missing fingers and peeled skin.
-11. **The dispute form makes a no-change dispute easy.** It opens with the recorded grade selected. Refuse to
-    save when the corrected grade equals the recorded one, and remind the operator to give the finger length
-    when correcting B → A.
-12. **Clearing test scans needs a shell.** Each reset so far was done by hand (database backup, delete scans,
-    disputes, events and frames, close the shift). Add a **Clear all scans** button with a confirm step and an
-    automatic backup.
+      the ripeness, and reserve Rejected for disease, rot, broken or missing fingers and peeled skin. Applied
+      to #SCN-080763 and #SCN-D730E4 (one blackened, rotting bunch scanned twice): both now Rejected.
+11. ~~**The dispute form makes a no-change dispute easy.**~~ Done: the form opens with no grade chosen,
+    refuses the recorded grade (the API refuses it too), and asks for the measured finger length when the
+    correction is Class A or Class B.
+12. ~~**Clearing test scans needs a shell.**~~ Done: **Clear all scans** on Recent scans. The operator types
+    CLEAR to confirm; it saves a verified backup to `/var/lib/banagrade/backups/banagrade-before-clear-*.db`,
+    deletes the scans, disputes, events and saved photos, and opens a new shift. Retraining copies are kept.

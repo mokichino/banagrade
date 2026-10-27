@@ -27,6 +27,7 @@ from .storage import Storage, disputes_zip, now_iso, scans_csv
 
 
 class SessionRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=80)
     notes: str | None = Field(default=None, max_length=500)
 
 
@@ -288,9 +289,13 @@ def analytics_summary(session: str | None = Query(None, max_length=64)) -> dict[
 
 
 @app.get("/api/analytics/trend")
-def analytics_trend(session: str | None = Query(None, max_length=64), bucket_minutes: int = Query(15, ge=1, le=1440)) -> dict[str, Any]:
+def analytics_trend(
+    session: str | None = Query(None, max_length=64),
+    bucket_minutes: int = Query(15, ge=1, le=1440),
+    utc_offset_minutes: int = Query(0, ge=-840, le=840),
+) -> dict[str, Any]:
     session_id = resolve_session(session)
-    return {"session_id": session_id, "bucket_minutes": bucket_minutes, "items": storage.rejection_trend(session_id, bucket_minutes)}
+    return {"session_id": session_id, "bucket_minutes": bucket_minutes, "items": storage.rejection_trend(session_id, bucket_minutes, utc_offset_minutes)}
 
 
 @app.post("/api/inspection/scans/{scan_id}/dispute", status_code=201)
@@ -311,7 +316,7 @@ async def dispute_scan(scan_id: str, payload: DisputeRequest) -> dict[str, Any]:
 
 @app.post("/api/inspection/scans/clear")
 async def clear_scans(payload: ClearScansRequest) -> dict[str, Any]:
-    """Back up the database, then delete every scan, dispute, event and frame and start a new shift."""
+    """Back up the database, then delete every scan, dispute, event, frame and emptied shift and start a new shift."""
     try:
         result = storage.clear_scans(
             Path(os.getenv("BANAGRADE_BACKUP_DIR", storage.path.parent / "backups")),
@@ -354,7 +359,7 @@ async def create_session(payload: SessionRequest) -> dict[str, Any]:
     current = storage.active_session()
     if current:
         storage.close_session(current["id"])
-    session = storage.create_session(payload.notes)
+    session = storage.create_session(payload.notes or "Shift started from dashboard", payload.name)
     await events.publish("session_updated", {"session_id": session["id"], "session": session})
     return session
 

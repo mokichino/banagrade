@@ -4,6 +4,8 @@ import { flushPromises, mount } from '@vue/test-utils'
 import ScanTable from '../ScanTable.vue'
 import DisputeModal from '../DisputeModal.vue'
 import ClearScansDialog from '../ClearScansDialog.vue'
+import ShiftSelect from '../ShiftSelect.vue'
+import RecordsCard from '../status/RecordsCard.vue'
 import ModelsCard from '../status/ModelsCard.vue'
 import OperationalSummaryCard from '../status/OperationalSummaryCard.vue'
 import HardwareStatusCard from '../status/HardwareStatusCard.vue'
@@ -16,7 +18,7 @@ import DashboardView from '../../views/DashboardView.vue'
 import HistoryView from '../../views/HistoryView.vue'
 import SystemStatusView from '../../views/SystemStatusView.vue'
 
-vi.mock('vue-chartjs', () => ({ Doughnut: { template: '<canvas />' }, Line: { template: '<canvas />' } }))
+vi.mock('vue-chartjs', () => ({ Doughnut: { template: '<canvas />' }, Line: { name: 'LineChart', props: ['data', 'options', 'plugins'], template: '<canvas />' } }))
 
 function mockFetch(routes) {
   const fetch = vi.fn(async url => {
@@ -121,7 +123,7 @@ describe('DisputeModal', () => {
 
 describe('ClearScansDialog', () => {
   it('only clears after CLEAR is typed and shows where the backup went', async () => {
-    const fetch = mockFetch({ '/api/inspection/scans/clear': { backup: '/var/lib/banagrade/backups/banagrade-before-clear-1.db', scans: 96, disputes: 42, frames: 96, session_id: 'n' } })
+    const fetch = mockFetch({ '/api/inspection/scans/clear': { backup: '/var/lib/banagrade/backups/banagrade-before-clear-1.db', scans: 96, disputes: 1, frames: 96, shifts: 3, session_id: 'n' } })
     const wrapper = mount(ClearScansDialog, { props: { open: false, scanCount: 96 } })
     await wrapper.setProps({ open: true })
     const button = () => wrapper.find('.primary-button.danger')
@@ -133,7 +135,7 @@ describe('ClearScansDialog', () => {
     await flushPromises()
 
     expect(fetch).toHaveBeenCalledWith('/api/inspection/scans/clear', expect.objectContaining({ method: 'POST', body: JSON.stringify({ confirm: 'CLEAR' }) }))
-    expect(wrapper.text()).toContain('Cleared 96 scans, 42 disputes and 96 photos')
+    expect(wrapper.text()).toContain('Cleared 96 scans, 1 dispute, 96 photos and 3 shifts')
     expect(wrapper.text()).toContain('banagrade-before-clear-1.db')
     expect(wrapper.emitted('cleared')).toHaveLength(1)
   })
@@ -298,54 +300,159 @@ describe('views', () => {
     })
     const wrapper = mount(DashboardView)
     await flushPromises()
-    expect(wrapper.text()).toContain('No accepted bunches yet.')
-    expect(wrapper.text()).toContain('No graded scans in this period yet.')
+    expect(wrapper.text()).toContain('No accepted bunches in this shift yet.')
+    expect(wrapper.text()).toContain('No graded scans in this shift yet.')
+    expect(wrapper.text()).toContain('No graded scans yet')  // a share of nothing is not 0%
     expect(wrapper.emitted('error')).toBeUndefined()
   })
 
   const SHIFTS = [
-    { id: 'now', notes: 'Toril batch', status: 'open', started_at: '2026-10-27T05:30:00Z', ended_at: null, scan_count: 3 },
-    { id: 'old', notes: 'Kapalong batch', status: 'closed', started_at: '2026-10-26T18:00:00Z', ended_at: '2026-10-27T05:30:00Z', scan_count: 40 }
+    { id: 'now', name: 'Toril batch', notes: 'Shift started from dashboard', status: 'open', started_at: '2026-10-27T05:30:00Z', ended_at: null, scan_count: 3 },
+    { id: 'old', name: null, notes: 'Shift opened automatically at startup', status: 'closed', started_at: '2026-10-26T18:48:29Z', ended_at: '2026-10-27T05:30:00Z', scan_count: 97 },
+    { id: 'restart', name: null, notes: 'Shift opened automatically at startup', status: 'closed', started_at: '2026-10-26T18:32:11Z', ended_at: '2026-10-26T18:48:29Z', scan_count: 0 }
   ]
+  const SUMMARY = { total_scans: 97, total_completed_scans: 93, class_a_count: 24, class_b_count: 45, rejected_count: 24, technical_failure_count: 4, export_acceptance_rate: 74.19 }
 
-  it('Dashboard starts a named shift and shows a past one', async () => {
-    const fetch = mockFetch({
-      '/api/analytics/summary': { total_scans: 3 },
-      '/api/analytics/trend': { items: [] },
+  it('ShiftSelect lists past shifts by time, hides empty ones and recovers from a cleared one', async () => {
+    const wrapper = mount(ShiftSelect, { props: { modelValue: 'gone', shifts: SHIFTS } })
+    expect(wrapper.findAll('option').map(option => option.text())).toEqual(['Current shift', 'All shifts', 'Oct 27, 02:48 – 13:30 · 97 scans'])
+    expect(wrapper.text()).not.toContain('opened automatically')
+    expect(wrapper.emitted('update:modelValue')[0]).toEqual(['active'])
+  })
+
+  it('Dashboard grades share one denominator and the trend sits on a clock', async () => {
+    mockFetch({
+      '/api/analytics/summary': SUMMARY,
+      '/api/analytics/trend': { items: [
+        { bucket_start: '2026-10-26T19:15:00+00:00', total: 8, rejected: 7, rejection_rate: 87.5 },
+        { bucket_start: '2026-10-27T05:15:00+00:00', total: 2, rejected: 0, rejection_rate: 0 }
+      ] },
       '/api/sessions': { items: SHIFTS },
       '/api/inspection/scans': { items: [] }
     })
     const wrapper = mount(DashboardView)
     await flushPromises()
-    expect(wrapper.find('.shift-meta').text()).toContain('Toril batch')
-    expect(wrapper.findAll('select[aria-label="Shift"] option').map(option => option.text())).toEqual(['Current shift', 'All shifts', expect.stringContaining('Kapalong batch')])
+    expect(wrapper.findAll('.kpi-share').map(share => share.text())).toEqual(['25.8% of graded', '48.4% of graded', '25.8% of graded'])
+    expect(wrapper.find('.yield-legend').text()).toContain('34.8%')
+    expect(wrapper.find('.volume-foot').text()).toContain('4 technical failures, not counted in the rates')
+    expect(wrapper.find('.chart-keys').text()).toContain('Shift average 25.8%')
+
+    const chart = wrapper.findComponent({ name: 'LineChart' })
+    expect(chart.props('data').datasets[0].data.map(point => point.y)).toEqual([87.5, null, 0])  // ten quiet hours break the line
+    expect(chart.props('options').scales.x.type).toBe('linear')
+    expect(chart.props('options').plugins.tooltip.callbacks.title([{ raw: { x: Date.parse('2026-10-26T19:15:00Z') } }])).toBe('Oct 27, 03:15–03:30')
+    expect(wrapper.findAll('.chart-table tbody tr')).toHaveLength(2)
+  })
+
+  it('Dashboard marks a past shift and starts a named shift from a dialog', async () => {
+    const fetch = mockFetch({
+      '/api/analytics/summary': SUMMARY,
+      '/api/analytics/trend': { items: [] },
+      '/api/sessions': { items: SHIFTS },
+      '/api/inspection/scans': { items: [] }
+    })
+    const wrapper = mount(DashboardView, { attachTo: document.body })
+    await flushPromises()
+    expect(fetch).toHaveBeenCalledWith(expect.stringMatching(/^\/api\/analytics\/trend\?session=active&bucket_minutes=15&utc_offset_minutes=480$/), expect.anything())
+    expect(wrapper.find('.shift-meta').text()).toBe('Toril batch · Started Oct 27, 13:30')
+    expect(wrapper.find('.scope-notice').exists()).toBe(false)
 
     await wrapper.find('select[aria-label="Shift"]').setValue('old')
     await flushPromises()
     expect(fetch).toHaveBeenCalledWith('/api/analytics/summary?session=old', expect.anything())
     expect(fetch).toHaveBeenCalledWith('/api/inspection/scans?session=old&limit=8', expect.anything())
-    expect(wrapper.find('.shift-meta').text()).toContain('ended')
+    expect(wrapper.find('.shift-meta').text()).toBe('Ran for 10 h 42 min')
+    expect(wrapper.find('.scope-notice').text()).toContain('Past shift.')
+    expect(wrapper.find('.volume-card').text()).toContain('scanned in this shift')
 
     await wrapper.findAll('button').find(button => button.text() === 'Start new shift').trigger('click')
-    await wrapper.find('input[aria-label="New shift name"]').setValue('  Toril batch 2  ')
-    await wrapper.find('.shift-form').trigger('submit')
+    const dialog = wrapper.find('[aria-labelledby="shift-title"]')
+    expect(dialog.text()).toContain('The current shift (started Oct 27, 13:30, 3 scans) ends now')
+    expect(document.activeElement).toBe(dialog.find('input').element)
+    await dialog.find('input').setValue('  Toril batch 2  ')
+    await dialog.trigger('submit')
     await flushPromises()
-    expect(fetch).toHaveBeenCalledWith('/api/sessions', expect.objectContaining({ method: 'POST', body: JSON.stringify({ notes: 'Toril batch 2' }) }))
+    expect(fetch).toHaveBeenCalledWith('/api/sessions', expect.objectContaining({ method: 'POST', body: JSON.stringify({ name: 'Toril batch 2' }) }))
+    expect(wrapper.find('[aria-labelledby="shift-title"]').exists()).toBe(false)
     expect(wrapper.find('select[aria-label="Shift"]').element.value).toBe('active')
+    expect(wrapper.find('.scope-notice').exists()).toBe(false)
+    wrapper.unmount()
   })
 
-  it('History lists one shift and exports only that shift', async () => {
-    const fetch = mockFetch({ '/api/inspection/scans': { items: [{ scan_id: 'a1', final_grade: 'Class B', processing_status: 'completed', captured_at: '2026-10-26T19:00:00Z' }] }, '/api/sessions': { items: SHIFTS } })
+  it('Dashboard goes back to the current shift from the past-shift notice', async () => {
+    mockFetch({ '/api/analytics/summary': SUMMARY, '/api/analytics/trend': { items: [] }, '/api/sessions': { items: SHIFTS }, '/api/inspection/scans': { items: [] } })
+    const wrapper = mount(DashboardView, { props: { scope: 'old', 'onUpdate:scope': scope => wrapper.setProps({ scope }) } })
+    await flushPromises()
+    await wrapper.find('.scope-notice button').trigger('click')
+    expect(wrapper.emitted('update:scope').at(-1)).toEqual(['active'])
+    expect(wrapper.find('.scope-notice').exists()).toBe(false)
+  })
+
+  const scan = (id, grade, extra = {}) => ({ scan_id: id, final_grade: grade, processing_status: grade ? 'completed' : 'failed', captured_at: '2026-10-26T19:00:00Z', ...extra })
+
+  it('History follows the shared shift and exports exactly the rows listed', async () => {
+    const fetch = mockFetch({ '/api/inspection/scans': { items: [scan('a1', 'Class B'), scan('r1', 'Rejected', { dispute_reason: '=1+1' })] }, '/api/sessions': { items: SHIFTS } })
+    const blobs = []
+    vi.stubGlobal('URL', { createObjectURL: blob => { blobs.push(blob); return 'blob:csv' }, revokeObjectURL: vi.fn() })
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
     const wrapper = mount(HistoryView)
     await flushPromises()
-    expect(fetch).toHaveBeenCalledWith('/api/inspection/scans?limit=5000', expect.anything())
+    expect(fetch).toHaveBeenCalledWith('/api/inspection/scans?limit=5000&session=active', expect.anything())
+    expect(wrapper.find('h2').text()).toBe('Current shift')
+    expect(wrapper.find('.result-count').text()).toBe('2 scans')
+    // Clearing every scan is not offered next to the everyday filters.
+    expect(wrapper.text()).not.toContain('Clear all scans')
+
+    await wrapper.find('select[aria-label="Filter by grade"]').setValue('Rejected')
+    expect(wrapper.find('.result-count').text()).toBe('1 of 2 scans match')
+    expect(wrapper.findAll('.export-actions button').map(button => [button.attributes('aria-label'), button.find('svg text').text()])).toEqual([['Export PDF', 'PDF'], ['Export CSV', 'CSV']])
+    await wrapper.find('.export-actions button[aria-label="Export CSV"]').trigger('click')
+    expect(click).toHaveBeenCalledTimes(1)
+    const csv = await blobs[0].text()
+    expect(csv).toContain('r1,Rejected')
+    expect(csv).toContain("'=1+1")
+    expect(csv).not.toContain('a1')
 
     await wrapper.find('select[aria-label="Shift"]').setValue('old')
     await flushPromises()
     expect(fetch).toHaveBeenCalledWith('/api/inspection/scans?limit=5000&session=old', expect.anything())
-    expect(wrapper.find('a.link-button').attributes('href')).toBe('/api/exports/scans.csv?session=old')
-    // Clearing still covers every shift, so the button is not limited to the one shown.
-    expect(wrapper.find('button.danger-outline').attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('h2').text()).toBe('Oct 27, 02:48 – 13:30')
+    click.mockRestore()
+  })
+
+  it('History pages long lists and says why a list is empty', async () => {
+    const many = Array.from({ length: 120 }, (_, index) => scan(`s${index}`, 'Class A'))
+    mockFetch({ '/api/inspection/scans': { items: many }, '/api/sessions': { items: SHIFTS } })
+    const wrapper = mount(HistoryView, { props: { scope: 'all' } })
+    await flushPromises()
+    expect(wrapper.findAll('tbody tr')).toHaveLength(50)
+    expect(wrapper.find('.result-count').text()).toBe('Showing 1–50 · 120 scans')
+    const next = () => wrapper.findAll('.pager button').find(button => button.text() === 'Next')
+    await next().trigger('click')
+    await next().trigger('click')
+    expect(wrapper.find('.result-count').text()).toBe('Showing 101–120 · 120 scans')
+    expect(next().attributes('disabled')).toBeDefined()
+
+    await wrapper.find('input[type="search"]').setValue('no such scan')
+    expect(wrapper.find('td.empty').text()).toBe('No scans match the search and grade filter.')
+    expect(wrapper.find('.pager').exists()).toBe(false)
+    await wrapper.findAll('.result-bar button').find(button => button.text() === 'Clear filters').trigger('click')
+    expect(wrapper.findAll('tbody tr')).toHaveLength(50)
+    expect(wrapper.find('.result-count').text()).toBe('Showing 1–50 · 120 scans')
+
+    mockFetch({ '/api/inspection/scans': { items: [] }, '/api/sessions': { items: SHIFTS } })
+    const empty = mount(HistoryView)
+    await flushPromises()
+    expect(empty.find('td.empty').text()).toBe('No scans in the current shift yet. Choose All shifts to see earlier scans.')
+    expect(empty.findAll('.export-actions button').every(button => button.attributes('disabled') !== undefined)).toBe(true)
+  })
+
+  it('System Status holds Clear all scans, with the counts it will delete', async () => {
+    const wrapper = mount(RecordsCard, { props: { shifts: SHIFTS } })
+    expect(wrapper.find('.records-summary').text()).toContain('Stored on the Pi: 100 scans in 2 shifts.')
+    await wrapper.find('.danger-zone button').trigger('click')
+    expect(wrapper.find('.primary-button.danger').text()).toBe('Delete 100 scans')
+    expect(mount(RecordsCard, { props: { shifts: [] } }).find('.danger-zone button').attributes('disabled')).toBeDefined()
   })
 
   it('Dashboard reports an unreachable API instead of showing totals', async () => {
@@ -355,13 +462,13 @@ describe('views', () => {
     expect(wrapper.emitted('error')[0][0]).toBe('Dashboard data unavailable: Service unavailable')
   })
 
-  it('History reports a failed load and disables the PDF export', async () => {
+  it('History reports a failed load and disables both exports', async () => {
     mockFetch({})
     const wrapper = mount(HistoryView)
     await flushPromises()
     expect(wrapper.emitted('error')[0][0]).toBe('Scan history unavailable: Service unavailable')
-    expect(wrapper.find('.result-count').text()).toBe('0 of 0 records')
-    expect(wrapper.find('button.primary-button').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('.result-count').text()).toBe('0 scans')
+    expect(wrapper.findAll('.export-actions button').map(button => button.attributes('disabled'))).toEqual(['', ''])
   })
 
   it('System Status reports a failed load and clears every card', async () => {

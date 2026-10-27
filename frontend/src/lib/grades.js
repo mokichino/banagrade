@@ -66,10 +66,12 @@ export function isHealthy(scan) {
   return String(scan?.stage1_status || '').toLowerCase() === 'healthy'
 }
 
-/** Stage 2 only runs for Healthy bunches; anything else is N/A (thesis 3.5.4 Rule 1). */
+/** Stage 2 only runs for Healthy bunches; anything else is N/A (thesis 3.5.4 Rule 1). A dispute corrects the final
+ * grade, not what Stage 2 measured, so a disputed scan shows the scanner's own grade here. */
 export function stage2Label(scan) {
   if (!isHealthy(scan)) return 'N/A'
-  return scan.final_grade === 'Class A' || scan.final_grade === 'Class B' ? scan.final_grade : 'N/A'
+  const grade = scan.disputed && scan.model_grade ? scan.model_grade : scan.final_grade
+  return grade === 'Class A' || grade === 'Class B' ? grade : 'N/A'
 }
 
 export function confidencePercent(value) {
@@ -89,11 +91,10 @@ export function formatTimestamp(iso) {
   return date.toLocaleString(undefined, { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
 }
 
-/** A shift as the pickers list it: its name, when it started and how many scans it holds. */
-export function shiftLabel(shift) {
-  const started = new Date(shift.started_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
-  const count = shift.scan_count ?? 0
-  return `${shift.notes || 'Unnamed shift'} · ${started} · ${count} scan${count === 1 ? '' : 's'}`
+/** A percentage (25.81) as the dashboard shows rates: one decimal, none when whole. A shift's sample is too small for more. */
+export function formatPercent(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return '—'
+  return `${Number(Number(value).toFixed(1))}%`
 }
 
 export function matchesSearch(scan, query) {

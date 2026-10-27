@@ -68,6 +68,18 @@ def test_rejection_trend_buckets(tmp_path: Path) -> None:
     assert trend[1] == {"bucket_start": "2026-10-13T08:15:00+00:00", "total": 1, "rejected": 0, "rejection_rate": 0.0}
 
 
+def test_rejection_trend_follows_the_viewers_clock(tmp_path: Path) -> None:
+    storage = Storage(tmp_path / "banagrade.db")
+    storage.initialize()
+    storage.save_scan(_scan("day1", None, "Rejected", "2026-10-13T15:59:00+00:00"))  # 23:59 in Manila
+    storage.save_scan(_scan("day2", None, "Class A", "2026-10-13T16:01:00+00:00"))  # 00:01 the next day
+    days = storage.rejection_trend(None, 1440, utc_offset_minutes=480)
+    assert [(item["bucket_start"], item["total"]) for item in days] == [("2026-10-12T16:00:00+00:00", 1), ("2026-10-13T16:00:00+00:00", 1)]
+    assert [item["bucket_start"] for item in storage.rejection_trend(None, 1440)] == ["2026-10-13T00:00:00+00:00"]
+    # A half-hour zone still gets buckets on its own quarter hours.
+    assert storage.rejection_trend(None, 60, utc_offset_minutes=330)[0]["bucket_start"] == "2026-10-13T15:30:00+00:00"
+
+
 def test_migration_adds_stage2_confidence(tmp_path: Path) -> None:
     storage = Storage(tmp_path / "banagrade.db")
     from app.storage import SCHEMA
@@ -79,6 +91,18 @@ def test_migration_adds_stage2_confidence(tmp_path: Path) -> None:
     with storage.connect() as connection:
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(scans)")}
     assert "stage2_confidence" in columns
+
+
+def test_migration_adds_shift_names_without_renaming_old_shifts(tmp_path: Path) -> None:
+    storage = Storage(tmp_path / "banagrade.db")
+    from app.storage import SCHEMA
+
+    with storage.connect() as connection:
+        connection.executescript(SCHEMA.replace("    notes TEXT,\n    name TEXT\n", "    notes TEXT\n"))
+        connection.execute("INSERT INTO sessions (id, started_at, status, notes) VALUES ('old', '2026-10-20T04:58:24+00:00', 'open', 'Shift opened automatically at startup')")
+    storage.initialize()
+    [old] = storage.list_sessions()
+    assert (old["notes"], old["name"]) == ("Shift opened automatically at startup", None)
 
 
 def test_dispute_keeps_model_grade_across_repeated_corrections(tmp_path: Path) -> None:
@@ -137,9 +161,20 @@ def test_scans_and_sessions_list_by_shift(tmp_path: Path) -> None:
     ]
 
 
+def test_shift_name_is_trimmed_and_blank_means_unnamed(tmp_path: Path) -> None:
+    storage = Storage(tmp_path / "banagrade.db")
+    storage.initialize()
+    named = storage.create_session("Shift started from dashboard", "  Toril batch ")
+    assert (named["name"], named["notes"]) == ("Toril batch", "Shift started from dashboard")
+    assert storage.create_session("Shift started from dashboard", "   ")["name"] is None
+    assert [row["name"] for row in storage.list_sessions()] == [None, "Toril batch"]
+
+
 def test_clear_scans_backs_up_then_deletes_records_and_frames(tmp_path: Path) -> None:
     storage = Storage(tmp_path / "banagrade.db")
     storage.initialize()
+    empty = storage.create_session("Shift opened automatically at startup")
+    storage.close_session(empty["id"])
     session = storage.create_session("Shift")
     frames = tmp_path / "frames"
     frames.mkdir()
@@ -153,7 +188,7 @@ def test_clear_scans_backs_up_then_deletes_records_and_frames(tmp_path: Path) ->
 
     result = storage.clear_scans(tmp_path / "backups", frames)
 
-    assert (result["scans"], result["disputes"], result["frames"]) == (2, 1, 1)
+    assert (result["scans"], result["disputes"], result["frames"], result["shifts"]) == (2, 1, 1, 2)
     assert storage.list_scans() == [] and storage.scan_disputes("a") == []
     assert not frame.exists() and elsewhere.exists()
     assert Path(dispute["archived_frames"][0]).exists()
@@ -161,6 +196,10 @@ def test_clear_scans_backs_up_then_deletes_records_and_frames(tmp_path: Path) ->
         assert backup.execute("SELECT COUNT(*) FROM scans").fetchone()[0] == 2
     active = storage.active_session()
     assert active["id"] == result["session_id"] != session["id"]
+    # The emptied shifts are in the backup only; the new shift is the one left.
+    assert [row["id"] for row in storage.list_sessions()] == [active["id"]]
+    with sqlite3.connect(result["backup"]) as backup:
+        assert backup.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 2
 
 
 def test_disputes_zip_sorts_frames_by_corrected_grade(tmp_path: Path) -> None:

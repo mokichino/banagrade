@@ -8,24 +8,28 @@ import ModelsCard from '../components/status/ModelsCard.vue'
 import OperationalSummaryCard from '../components/status/OperationalSummaryCard.vue'
 import DriftCard from '../components/status/DriftCard.vue'
 import PowerCard from '../components/status/PowerCard.vue'
+import RecordsCard from '../components/status/RecordsCard.vue'
 
 defineProps({ led: { type: String, default: 'offline' } })
 const emit = defineEmits(['error'])
 const status = ref(null)
 const telemetry = ref(null)
 const drift = ref(null)
+const shifts = ref(null)
 let timer
 
 async function load() {
   try {
-    const [statusData, telemetryData, driftData] = await Promise.all([request('/api/system/status'), request('/api/system/telemetry'), request('/api/system/drift')])
+    const [statusData, telemetryData, driftData, shiftData] = await Promise.all([request('/api/system/status'), request('/api/system/telemetry'), request('/api/system/drift'), request('/api/sessions')])
     status.value = statusData
     telemetry.value = telemetryData
     drift.value = driftData
+    shifts.value = shiftData.items
   } catch (error) {
     status.value = null
     telemetry.value = null
     drift.value = null
+    shifts.value = null
     emit('error', `System status unavailable: ${error.message}`)
   }
 }
@@ -46,5 +50,6 @@ onBeforeUnmount(() => window.clearInterval(timer))
     <ModelsCard :models="status?.models" />
     <DriftCard :drift="drift" />
     <PowerCard :power="status?.power" />
+    <RecordsCard :shifts="shifts" @cleared="load" />
   </section>
 </template>

@@ -20,6 +20,12 @@ describe('grade presentation', () => {
     expect(stage2Label(healthyA)).toBe('Class A')
     expect(stage2Label(failure)).toBe('N/A')
   })
+  it('keeps the Stage 2 result when an operator corrects the final grade', () => {
+    expect(stage2Label({ ...healthyA, final_grade: 'Rejected', disputed: 1, model_grade: 'Class A' })).toBe('Class A')
+    expect(stage2Label({ ...healthyA, final_grade: 'Class A', disputed: 1, model_grade: 'Class B' })).toBe('Class B')
+    expect(stage2Label({ ...healthyA, final_grade: 'Class A', disputed: 1, model_grade: 'Technical Failure' })).toBe('N/A')
+    expect(stage2Label({ ...healthyA, final_grade: 'Class B', disputed: 1, model_grade: null })).toBe('Class B')  // too old to know
+  })
   it('formats confidence safely', () => {
     expect(formatConfidence(0.9734)).toBe('97.3%')
     expect(formatConfidence(null)).toBe('N/A')

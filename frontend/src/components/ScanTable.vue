@@ -1,7 +1,7 @@
 <script setup>
 import { confidencePercent, disputeSummary, failureReason, finalGradeKey, finalGradeLabel, formatConfidence, formatTimestamp, isHealthy, scanLabel, stage1Label, stage2Label } from '../lib/grades.js'
 
-defineProps({ scans: { type: Array, required: true } })
+defineProps({ scans: { type: Array, required: true }, emptyText: { type: String, default: 'No scan records match.' } })
 defineEmits(['select', 'dispute'])
 </script>
 
@@ -42,7 +42,7 @@ defineEmits(['select', 'dispute'])
             </button>
           </td>
         </tr>
-        <tr v-if="!scans.length"><td colspan="7" class="empty">No scan records match.</td></tr>
+        <tr v-if="!scans.length"><td colspan="7" class="empty">{{ emptyText }}</td></tr>
       </tbody>
     </table>
   </div>

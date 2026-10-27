@@ -1,36 +1,53 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { apiBase, request } from '../composables/useApi.js'
-import { GRADE_FILTERS, matchesGrade, matchesSearch, shiftLabel } from '../lib/grades.js'
+import { request } from '../composables/useApi.js'
+import { GRADE_FILTERS, matchesGrade, matchesSearch } from '../lib/grades.js'
+import { downloadScansCsv } from '../lib/csv.js'
+import { plural, scopeDescription, scopeQuery, scopeTitle } from '../lib/shifts.js'
+import FileIcon from '../components/FileIcon.vue'
 import ScanTable from '../components/ScanTable.vue'
-import ClearScansDialog from '../components/ClearScansDialog.vue'
 import ShiftSelect from '../components/ShiftSelect.vue'
+
+const LIMIT = 5000
+const PAGE_SIZE = 50
 
 const props = defineProps({ refreshKey: { type: Number, default: 0 } })
 const emit = defineEmits(['dispute', 'select', 'error'])
+// Shared with the Dashboard through App, so "View all scans" opens the shift that was on screen.
+const scope = defineModel('scope', { type: String, default: 'active' })
 
 const scans = ref([])
+const shifts = ref([])
 const loading = ref(true)
 const search = ref('')
 const gradeFilter = ref('All')
+const page = ref(1)
 const exporting = ref(false)
-const clearing = ref(false)
-const shift = ref('all')
-const shifts = ref([])
-const shiftQuery = computed(() => (shift.value === 'all' ? '' : `session=${encodeURIComponent(shift.value)}`))
-const shiftName = computed(() => {
-  if (shift.value === 'all') return 'All shifts'
-  const found = shifts.value.find(item => (shift.value === 'active' ? item.status === 'open' : item.id === shift.value))
-  return found ? shiftLabel(found) : 'Current shift'
-})
-// Clearing deletes every shift's scans, not just the ones shown.
-const allScans = computed(() => (shift.value === 'all' ? scans.value.length : shifts.value.reduce((total, item) => total + (item.scan_count || 0), 0)))
+
+const filtering = computed(() => Boolean(search.value.trim()) || gradeFilter.value !== 'All')
 const filtered = computed(() => scans.value.filter(scan => matchesSearch(scan, search.value) && matchesGrade(scan, gradeFilter.value)))
+const pages = computed(() => Math.max(1, Math.ceil(filtered.value.length / PAGE_SIZE)))
+const pageRows = computed(() => filtered.value.slice((page.value - 1) * PAGE_SIZE, page.value * PAGE_SIZE))
+const truncated = computed(() => scans.value.length >= LIMIT)
+
+const countText = computed(() => {
+  if (loading.value) return 'Loading…'
+  const total = filtered.value.length
+  const shown = total > PAGE_SIZE ? `Showing ${((page.value - 1) * PAGE_SIZE + 1).toLocaleString()}–${Math.min(page.value * PAGE_SIZE, total).toLocaleString()} · ` : ''
+  return shown + (filtering.value ? `${total.toLocaleString()} of ${plural(scans.value.length, 'scan')} match` : plural(total, 'scan'))
+})
+const emptyText = computed(() => {
+  if (loading.value) return 'Loading scans…'
+  if (filtering.value && scans.value.length) return 'No scans match the search and grade filter.'
+  if (scope.value === 'active') return 'No scans in the current shift yet. Choose All shifts to see earlier scans.'
+  return scope.value === 'all' ? 'No scans recorded yet.' : 'This shift has no scans.'
+})
 
 async function load() {
   try {
+    const query = scopeQuery(scope.value)
     const [scanData, shiftData] = await Promise.all([
-      request(`/api/inspection/scans?limit=5000${shiftQuery.value ? '&' + shiftQuery.value : ''}`),
+      request(`/api/inspection/scans?limit=${LIMIT}${query ? `&${query}` : ''}`),
       request('/api/sessions')
     ])
     scans.value = scanData.items
@@ -40,36 +57,56 @@ async function load() {
   } finally { loading.value = false }
 }
 
-async function downloadPdf() {
+function clearFilters() {
+  search.value = ''
+  gradeFilter.value = 'All'
+}
+
+async function exportPdf() {
   exporting.value = true
   try {
     const { downloadScansPdf } = await import('../lib/pdf.js')
-    downloadScansPdf(filtered.value, { filter: gradeFilter.value, search: search.value, shift: shiftName.value })
+    downloadScansPdf(filtered.value, { filter: gradeFilter.value, search: search.value, shift: scopeDescription(scope.value, shifts.value) })
   } catch (error) { emit('error', `PDF export failed: ${error.message}`) } finally { exporting.value = false }
 }
 
 onMounted(load)
 watch(() => props.refreshKey, load)
-watch(shift, load)
+watch(scope, load)
+watch([search, gradeFilter, scope], () => { page.value = 1 })
+watch(pages, count => { page.value = Math.min(page.value, count) })
 </script>
 
 <template>
   <section class="panel">
-    <div class="panel-heading history-heading">
-      <div><p class="eyebrow">Audit trail</p><h2>Recent scans</h2><p class="muted">Every scan is stored in banagrade.db with its timestamp, model confidences and final grade.</p></div>
-      <button class="secondary-button danger-outline" :disabled="!allScans" @click="clearing = true">Clear all scans</button>
+    <div class="panel-heading">
+      <div>
+        <p class="eyebrow">Audit trail</p>
+        <h2>{{ scopeTitle(scope, shifts) }}</h2>
+        <p class="muted">Every scan with its time, model confidence and final grade. Select a Scan ID for details, or the flag to correct a grade.</p>
+      </div>
     </div>
     <div class="history-controls">
-      <input v-model="search" type="search" aria-label="Search by Scan ID or timestamp" placeholder="Search Scan ID or timestamp">
-      <ShiftSelect v-model="shift" :shifts="shifts" />
+      <input v-model="search" type="search" aria-label="Search by Scan ID or time" placeholder="Search Scan ID or time">
+      <ShiftSelect v-model="scope" :shifts="shifts" />
       <select v-model="gradeFilter" aria-label="Filter by grade">
         <option v-for="option in GRADE_FILTERS" :key="option" :value="option">{{ option === 'All' ? 'All grades' : option }}</option>
       </select>
-      <button class="primary-button" :disabled="exporting || !filtered.length" @click="downloadPdf">{{ exporting ? 'Preparing…' : 'Download PDF' }}</button>
-      <a class="secondary-button link-button" :href="`${apiBase}/api/exports/scans.csv${shiftQuery ? '?' + shiftQuery : ''}`">CSV</a>
+      <div class="export-actions" role="group" aria-label="Export the scans listed">
+        <button class="secondary-button export-button" :disabled="exporting || !filtered.length" :aria-busy="exporting" :aria-label="exporting ? 'Preparing PDF' : 'Export PDF'" :title="exporting ? 'Preparing PDF…' : 'Export PDF: the scans listed, with the search and grade filter applied'" @click="exportPdf"><FileIcon type="pdf" /></button>
+        <button class="secondary-button export-button" :disabled="!filtered.length" aria-label="Export CSV" title="Export CSV: the scans listed, with every stored field" @click="downloadScansCsv(filtered)"><FileIcon type="csv" /></button>
+      </div>
     </div>
-    <p class="muted small result-count">{{ loading ? 'Loading…' : `${filtered.length} of ${scans.length} records` }}</p>
-    <ScanTable :scans="filtered" @select="$emit('select', $event)" @dispute="$emit('dispute', $event)" />
-    <ClearScansDialog :open="clearing" :scan-count="allScans" @close="clearing = false" @cleared="load" />
+    <div class="result-bar">
+      <p class="muted small result-count" aria-live="polite">{{ countText }}</p>
+      <button v-if="filtering" class="text-button" @click="clearFilters">Clear filters</button>
+    </div>
+    <ScanTable :scans="pageRows" :empty-text="emptyText" @select="$emit('select', $event)" @dispute="$emit('dispute', $event)" />
+    <p v-if="truncated" class="muted small table-note">Only the newest {{ LIMIT.toLocaleString() }} scans are loaded. Choose one shift to see older ones.</p>
+    <nav v-if="pages > 1" class="pager" aria-label="Scan pages">
+      <button class="secondary-button" :disabled="page === 1" @click="page -= 1">Previous</button>
+      <span class="muted small tabular">Page {{ page }} of {{ pages }}</span>
+      <button class="secondary-button" :disabled="page === pages" @click="page += 1">Next</button>
+    </nav>
   </section>
 </template>

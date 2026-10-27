@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     started_at TEXT NOT NULL,
     ended_at TEXT,
     status TEXT NOT NULL CHECK(status IN ('open', 'closed')),
-    notes TEXT
+    notes TEXT,
+    name TEXT
 );
 CREATE TABLE IF NOT EXISTS scans (
     scan_id TEXT PRIMARY KEY,
@@ -115,6 +116,9 @@ class Storage:
             scan_columns = {row["name"] for row in connection.execute("PRAGMA table_info(scans)")}
             if "stage2_confidence" not in scan_columns:
                 connection.execute("ALTER TABLE scans ADD COLUMN stage2_confidence REAL")
+            # Shifts once used notes as their name; name now holds only what the operator typed.
+            if "name" not in {row["name"] for row in connection.execute("PRAGMA table_info(sessions)")}:
+                connection.execute("ALTER TABLE sessions ADD COLUMN name TEXT")
             connection.execute(
                 "INSERT OR IGNORE INTO system_config (id, updated_at) VALUES (1, ?)",
                 (now_iso(),),
@@ -160,7 +164,7 @@ class Storage:
         return {"id": dispute_id, "scan_id": scan_id, "reason": reason, "corrected_grade": corrected_grade, "original_grade": original_grade, "archived_frames": archived}
 
     def clear_scans(self, backup_dir: Path, frame_dir: Path) -> dict[str, Any]:
-        """Verified backup first, then delete all scans, disputes, events and frames and open a new shift.
+        """Verified backup first, then delete all scans, disputes, events, frames and the shifts left empty, and open a new shift.
 
         Retraining copies of disputed frames are kept: they are training data, not scan records.
         """
@@ -193,6 +197,7 @@ class Storage:
             connection.execute("DELETE FROM system_events")
             connection.executemany("DELETE FROM scans WHERE scan_id = ?", ids)
             connection.execute("UPDATE sessions SET status = 'closed', ended_at = ? WHERE status = 'open'", (now_iso(),))
+            shifts = connection.execute("DELETE FROM sessions WHERE NOT EXISTS (SELECT 1 FROM scans WHERE session_id = sessions.id)").rowcount
         frames = [path for _, refs in backed_up if refs for path in (json.loads(refs) if refs.startswith("[") else [refs])]
         removed = 0
         for frame in map(Path, frames):
@@ -201,7 +206,7 @@ class Storage:
                 frame.unlink()
                 removed += 1
         session = self.create_session("Shift opened after clearing scans")
-        return {"backup": str(target), "scans": expected["scans"], "disputes": expected["scan_disputes"], "frames": removed, "session_id": session["id"]}
+        return {"backup": str(target), "scans": expected["scans"], "disputes": expected["scan_disputes"], "frames": removed, "shifts": shifts, "session_id": session["id"]}
 
     def scan_disputes(self, scan_id: str) -> list[dict[str, Any]]:
         with self.connect() as connection:
@@ -265,11 +270,12 @@ class Storage:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def create_session(self, notes: str | None = None) -> dict[str, Any]:
-        session = {"id": str(uuid.uuid4()), "started_at": now_iso(), "status": "open", "notes": notes}
+    def create_session(self, notes: str | None = None, name: str | None = None) -> dict[str, Any]:
+        """`notes` says how the shift began; `name` is what the operator called it, if anything."""
+        session = {"id": str(uuid.uuid4()), "started_at": now_iso(), "status": "open", "notes": notes, "name": (name or "").strip() or None}
         with self.connect() as connection:
             connection.execute(
-                "INSERT INTO sessions (id, started_at, status, notes) VALUES (?, ?, ?, ?)",
+                "INSERT INTO sessions (id, started_at, status, notes, name) VALUES (?, ?, ?, ?, ?)",
                 tuple(session.values()),
             )
         return session
@@ -372,10 +378,16 @@ class Storage:
             "average_inference_latency_ms": round(sum(latencies) / len(latencies), 2) if latencies else None,
         }
 
-    def rejection_trend(self, session_id: str | None = None, bucket_minutes: int = 15) -> list[dict[str, Any]]:
-        """Rejection rate per time bucket over graded scans, oldest first."""
+    def rejection_trend(self, session_id: str | None = None, bucket_minutes: int = 15, utc_offset_minutes: int = 0) -> list[dict[str, Any]]:
+        """Rejection rate per time bucket over graded scans, oldest first.
+
+        Buckets follow the viewer's clock (`utc_offset_minutes`, +480 in the Philippines), so a 1-day bucket starts at
+        local midnight rather than 08:00. Intervals without a graded scan are left out.
+        """
         if bucket_minutes <= 0:
             raise ValueError("bucket_minutes must be positive")
+        size = bucket_minutes * 60
+        offset = utc_offset_minutes * 60
         buckets: dict[datetime, dict[str, int]] = {}
         for row in self._graded_rows(session_id):
             if row["final_grade"] not in ("Class A", "Class B", "Rejected") or not row["captured_at"]:
@@ -386,11 +398,8 @@ class Storage:
                 continue
             if captured.tzinfo is None:
                 captured = captured.replace(tzinfo=UTC)
-            minute = (captured.minute // bucket_minutes) * bucket_minutes if bucket_minutes < 60 else 0
-            start = captured.replace(minute=minute, second=0, microsecond=0)
-            if bucket_minutes >= 60:
-                hours = bucket_minutes // 60
-                start = start.replace(hour=(start.hour // hours) * hours)
+            local = int(captured.timestamp()) + offset
+            start = datetime.fromtimestamp(local - local % size - offset, UTC)
             bucket = buckets.setdefault(start, {"total": 0, "rejected": 0})
             bucket["total"] += 1
             bucket["rejected"] += row["final_grade"] == "Rejected"

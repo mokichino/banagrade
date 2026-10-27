@@ -39,6 +39,9 @@ describe('grade presentation', () => {
     expect(matchesGrade(rejected, 'Technical failure')).toBe(false)
     expect(matchesGrade({ ...healthyA, disputed: 1 }, 'Disputed')).toBe(true)
     expect(matchesGrade(healthyA, 'Disputed')).toBe(false)
+    const voided = { ...healthyA, voided_at: '2026-10-27T06:40:00Z', void_reason: 'Test run' }
+    expect(['All', 'Voided', 'Class A', 'Disputed'].map(filter => matchesGrade(voided, filter))).toEqual([true, true, false, false])
+    expect(matchesGrade(healthyA, 'Voided')).toBe(false)
   })
   it('summarises a dispute for the table badge', () => {
     expect(disputeSummary(healthyA)).toBe('')

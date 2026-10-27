@@ -139,16 +139,28 @@ def test_dispute_refuses_the_recorded_grade(client) -> None:
     assert api.storage.scan_disputes("n1") == []
 
 
-def test_clear_scans_needs_confirmation(client, tmp_path, monkeypatch) -> None:
+def test_scans_are_voided_not_deleted(client) -> None:
     test_client, api = client
-    monkeypatch.setenv("BANAGRADE_BACKUP_DIR", str(tmp_path / "backups"))
-    api.storage.save_scan({"scan_id": "c1", "captured_at": "2026-10-25T08:00:00+00:00", "final_grade": "Class A", "processing_status": "completed"})
-    assert test_client.post("/api/inspection/scans/clear", json={"confirm": "yes"}).status_code == 422
-    assert len(api.storage.list_scans()) == 1
+    for scan_id, grade in (("v1", "Class A"), ("v2", "Rejected")):
+        api.storage.save_scan({"scan_id": scan_id, "captured_at": "2026-10-25T08:00:00+00:00", "final_grade": grade, "processing_status": "completed"})
+    # The dashboard can no longer delete scans at all.
+    assert test_client.post("/api/inspection/scans/clear", json={"confirm": "CLEAR"}).status_code in (404, 405)
 
-    result = test_client.post("/api/inspection/scans/clear", json={"confirm": "CLEAR"}).json()
-    assert result["scans"] == 1 and Path(result["backup"]).parent == tmp_path / "backups"
-    assert api.storage.list_scans() == []
+    assert test_client.post("/api/inspection/scans/void", json={"scan_ids": ["v1"], "reason": "   "}).status_code == 422
+    assert test_client.post("/api/inspection/scans/void", json={"scan_ids": [], "reason": "Test run"}).status_code == 422
+    assert test_client.post("/api/inspection/scans/void", json={"scan_ids": ["nope"], "reason": "Test run"}).status_code == 404
+    assert test_client.post("/api/inspection/scans/void", json={"scan_ids": ["v1", "v1"], "reason": "  Test object, not a bunch "}).json() == {"voided": 1, "skipped": 0}
+    assert test_client.post("/api/inspection/scans/void", json={"scan_ids": ["v1", "v2"], "reason": "Test run"}).json() == {"voided": 1, "skipped": 1}
+    assert api.storage.get_scan("v1")["void_reason"] == "Test object, not a bunch"
+    summary = test_client.get("/api/analytics/summary").json()
+    assert (summary["total_scans"], summary["voided_count"]) == (0, 2)
+    assert len(test_client.get("/api/inspection/scans").json()["items"]) == 2
+
+    refused = test_client.post("/api/inspection/scans/v1/dispute", json={"corrected_grade": "Class B", "reason": "Middle finger 11 cm"})
+    assert refused.status_code == 409 and "Count it again" in refused.json()["detail"]
+    assert test_client.post("/api/inspection/scans/unvoid", json={"scan_ids": ["v1"]}).json() == {"restored": 1, "skipped": 0}
+    assert test_client.get("/api/analytics/summary").json()["total_scans"] == 1
+    assert test_client.post("/api/inspection/scans/v1/dispute", json={"corrected_grade": "Class B", "reason": "Middle finger 11 cm"}).status_code == 201
 
 
 def test_csv_export_round_trips_every_stored_value(client) -> None:

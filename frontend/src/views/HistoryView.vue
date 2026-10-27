@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { request } from '../composables/useApi.js'
-import { GRADE_FILTERS, matchesGrade, matchesSearch } from '../lib/grades.js'
+import { GRADE_FILTERS, isVoided, matchesGrade, matchesSearch } from '../lib/grades.js'
 import { downloadScansCsv } from '../lib/csv.js'
 import { plural, scopeDescription, scopeQuery, scopeTitle } from '../lib/shifts.js'
 import FileIcon from '../components/FileIcon.vue'
@@ -12,7 +12,7 @@ const LIMIT = 5000
 const PAGE_SIZE = 50
 
 const props = defineProps({ refreshKey: { type: Number, default: 0 } })
-const emit = defineEmits(['dispute', 'select', 'error'])
+const emit = defineEmits(['dispute', 'select', 'void', 'error'])
 // Shared with the Dashboard through App, so "View all scans" opens the shift that was on screen.
 const scope = defineModel('scope', { type: String, default: 'active' })
 
@@ -29,12 +29,17 @@ const filtered = computed(() => scans.value.filter(scan => matchesSearch(scan, s
 const pages = computed(() => Math.max(1, Math.ceil(filtered.value.length / PAGE_SIZE)))
 const pageRows = computed(() => filtered.value.slice((page.value - 1) * PAGE_SIZE, page.value * PAGE_SIZE))
 const truncated = computed(() => scans.value.length >= LIMIT)
+const listedVoided = computed(() => filtered.value.filter(isVoided))
+const listedCounting = computed(() => filtered.value.filter(scan => !isVoided(scan)))
+// Voiding a batch (a test run, say) is offered once the list is narrowed to a shift or a filter, never for all history at once.
+const batchVoid = computed(() => listedCounting.value.length > 1 && (scope.value !== 'all' || filtering.value))
 
 const countText = computed(() => {
   if (loading.value) return 'Loading…'
   const total = filtered.value.length
   const shown = total > PAGE_SIZE ? `Showing ${((page.value - 1) * PAGE_SIZE + 1).toLocaleString()}–${Math.min(page.value * PAGE_SIZE, total).toLocaleString()} · ` : ''
-  return shown + (filtering.value ? `${total.toLocaleString()} of ${plural(scans.value.length, 'scan')} match` : plural(total, 'scan'))
+  const voided = gradeFilter.value === 'All' && listedVoided.value.length ? ` · ${listedVoided.value.length.toLocaleString()} voided` : ''
+  return shown + (filtering.value ? `${total.toLocaleString()} of ${plural(scans.value.length, 'scan')} match` : plural(total, 'scan')) + voided
 })
 const emptyText = computed(() => {
   if (loading.value) return 'Loading scans…'
@@ -100,8 +105,10 @@ watch(pages, count => { page.value = Math.min(page.value, count) })
     <div class="result-bar">
       <p class="muted small result-count" aria-live="polite">{{ countText }}</p>
       <button v-if="filtering" class="text-button" @click="clearFilters">Clear filters</button>
+      <button v-if="gradeFilter === 'Voided' && listedVoided.length > 1" class="text-button batch-action" @click="$emit('void', { scans: listedVoided, restore: true })">Count all {{ listedVoided.length.toLocaleString() }} again…</button>
+      <button v-else-if="batchVoid" class="text-button batch-action" @click="$emit('void', { scans: listedCounting, restore: false })">Void all {{ listedCounting.length.toLocaleString() }} listed…</button>
     </div>
-    <ScanTable :scans="pageRows" :empty-text="emptyText" @select="$emit('select', $event)" @dispute="$emit('dispute', $event)" />
+    <ScanTable :scans="pageRows" :empty-text="emptyText" @select="$emit('select', $event)" @dispute="$emit('dispute', $event)" @void="$emit('void', $event)" />
     <p v-if="truncated" class="muted small table-note">Only the newest {{ LIMIT.toLocaleString() }} scans are loaded. Choose one shift to see older ones.</p>
     <nav v-if="pages > 1" class="pager" aria-label="Scan pages">
       <button class="secondary-button" :disabled="page === 1" @click="page -= 1">Previous</button>

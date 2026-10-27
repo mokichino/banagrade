@@ -2,18 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import os
-import sqlite3
 import tempfile
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 from starlette.background import BackgroundTask
 
 from . import demo, power
@@ -36,8 +35,16 @@ class DisputeRequest(BaseModel):
     corrected_grade: str | None = Field(default=None, pattern="^(Class A|Class B|Rejected|Technical Failure)$")
 
 
-class ClearScansRequest(BaseModel):
-    confirm: str = Field(pattern="^CLEAR$")
+ScanIds = Annotated[list[str], Field(min_length=1, max_length=5000)]
+
+
+class VoidRequest(BaseModel):
+    scan_ids: ScanIds
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=500)]
+
+
+class UnvoidRequest(BaseModel):
+    scan_ids: ScanIds
 
 
 class PowerRequest(BaseModel):
@@ -303,6 +310,8 @@ async def dispute_scan(scan_id: str, payload: DisputeRequest) -> dict[str, Any]:
     scan = storage.get_scan(scan_id)
     if scan is None:
         raise HTTPException(status_code=404, detail="Scan not found")
+    if scan["voided_at"]:
+        raise HTTPException(status_code=409, detail="This scan is voided. Count it again before disputing its grade.")
     recorded = scan["final_grade"] or "Technical Failure"
     if payload.corrected_grade == recorded:
         raise HTTPException(status_code=400, detail=f"The scan is already recorded as {recorded}. Choose a different grade.")
@@ -314,19 +323,24 @@ async def dispute_scan(scan_id: str, payload: DisputeRequest) -> dict[str, Any]:
     return {**result, "status": "open"}
 
 
-@app.post("/api/inspection/scans/clear")
-async def clear_scans(payload: ClearScansRequest) -> dict[str, Any]:
-    """Back up the database, then delete every scan, dispute, event, frame and emptied shift and start a new shift."""
-    try:
-        result = storage.clear_scans(
-            Path(os.getenv("BANAGRADE_BACKUP_DIR", storage.path.parent / "backups")),
-            Path(os.getenv("BANAGRADE_FRAME_DIR", storage.path.parent / "frames")),
-        )
-    except (sqlite3.Error, RuntimeError) as error:
-        raise HTTPException(status_code=500, detail=f"Nothing was deleted: {error}") from error
-    await events.publish("scans_cleared", result)
-    await events.publish("session_updated", {"session_id": result["session_id"]})
-    return result
+# Scans are never deleted from the dashboard: there is no login, and the scan log is the audit trail. Voiding
+# leaves a scan out of the totals but keeps it listed; clearing test data is scripts/clear_scans.py on the Pi.
+@app.post("/api/inspection/scans/void")
+async def void_scans(payload: VoidRequest) -> dict[str, Any]:
+    voided = storage.void_scans(payload.scan_ids, payload.reason)
+    if not voided and not any(storage.get_scan(scan_id) for scan_id in payload.scan_ids):
+        raise HTTPException(status_code=404, detail="Scan not found")
+    await events.publish("scans_voided", {"scan_ids": voided, "reason": payload.reason})
+    return {"voided": len(voided), "skipped": len(set(payload.scan_ids)) - len(voided)}
+
+
+@app.post("/api/inspection/scans/unvoid")
+async def unvoid_scans(payload: UnvoidRequest) -> dict[str, Any]:
+    restored = storage.unvoid_scans(payload.scan_ids)
+    if not restored and not any(storage.get_scan(scan_id) for scan_id in payload.scan_ids):
+        raise HTTPException(status_code=404, detail="Scan not found")
+    await events.publish("scans_unvoided", {"scan_ids": restored})
+    return {"restored": len(restored), "skipped": len(set(payload.scan_ids)) - len(restored)}
 
 
 @app.get("/api/inspection/scans/{scan_id}/disputes")

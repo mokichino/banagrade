@@ -38,6 +38,19 @@ def test_backup_keeps_only_the_newest_copies(tmp_path) -> None:
     assert len(names) == 2 and names[0] == "banagrade-20260105-000000.db"
 
 
+def test_pruning_never_touches_safety_copies(tmp_path) -> None:
+    dest = tmp_path / "backups"
+    dest.mkdir()
+    # Fourteen hand-made safety copies sort after the nightly ones; they used to fill every slot.
+    safety = [dest / f"banagrade-before-step{index:02d}-20261027-000000.db" for index in range(14)]
+    for path in safety:
+        path.write_bytes(b"")
+    (dest / "banagrade-20261026-233000.db").write_bytes(b"")
+    target = backup_db.backup(_db(tmp_path), dest, keep=2)
+    assert target.exists() and (dest / "banagrade-20261026-233000.db").exists()
+    assert all(path.exists() for path in safety)
+
+
 def test_backup_of_missing_database_fails(tmp_path) -> None:
     with pytest.raises(sqlite3.Error):
         backup_db.backup(tmp_path / "missing.db", tmp_path / "backups", keep=2)

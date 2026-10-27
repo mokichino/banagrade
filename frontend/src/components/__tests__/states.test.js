@@ -3,9 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import ScanTable from '../ScanTable.vue'
 import DisputeModal from '../DisputeModal.vue'
-import ClearScansDialog from '../ClearScansDialog.vue'
 import ShiftSelect from '../ShiftSelect.vue'
-import RecordsCard from '../status/RecordsCard.vue'
+import VoidDialog from '../VoidDialog.vue'
 import ModelsCard from '../status/ModelsCard.vue'
 import OperationalSummaryCard from '../status/OperationalSummaryCard.vue'
 import HardwareStatusCard from '../status/HardwareStatusCard.vue'
@@ -121,23 +120,50 @@ describe('DisputeModal', () => {
   })
 })
 
-describe('ClearScansDialog', () => {
-  it('only clears after CLEAR is typed and shows where the backup went', async () => {
-    const fetch = mockFetch({ '/api/inspection/scans/clear': { backup: '/var/lib/banagrade/backups/banagrade-before-clear-1.db', scans: 96, disputes: 1, frames: 96, shifts: 3, session_id: 'n' } })
-    const wrapper = mount(ClearScansDialog, { props: { open: false, scanCount: 96 } })
-    await wrapper.setProps({ open: true })
-    const button = () => wrapper.find('.primary-button.danger')
-    expect(button().text()).toBe('Delete 96 scans')
-    expect(button().attributes('disabled')).toBeDefined()
-    await wrapper.find('input').setValue('clear')
-    expect(button().attributes('disabled')).toBeUndefined()
+describe('voiding instead of deleting', () => {
+  const voided = { scan_id: 'v1', captured_at: '2026-10-26T20:28:23Z', stage1_status: 'Healthy', final_grade: 'Rejected', voided_at: '2026-10-27T06:40:00Z', void_reason: 'Duplicate scan of the same bunch' }
+  const counting = { scan_id: 'c1', captured_at: '2026-10-26T20:45:47Z', stage1_status: 'Healthy', final_grade: 'Class A' }
+
+  it('ScanTable keeps a voided scan listed, marked, with its reason and no dispute', async () => {
+    const wrapper = mount(ScanTable, { props: { scans: [voided, counting] } })
+    const [row, plain] = wrapper.findAll('tbody tr')
+    expect(row.classes()).toContain('voided')
+    expect(row.find('.voided-badge').text()).toBe('Voided')
+    expect(row.find('.failure-reason').text()).toContain('Duplicate scan of the same bunch')
+    expect(row.find('.dispute-button').attributes('disabled')).toBeDefined()
+    expect(row.find('.void-button').attributes('aria-label')).toBe('Count again #SCN-V1')
+    expect(plain.find('.void-button').attributes('aria-label')).toBe('Void #SCN-C1')
+    await plain.find('.void-button').trigger('click')
+    expect(wrapper.emitted('void')[0][0]).toEqual({ scans: [counting], restore: false })
+  })
+
+  it('VoidDialog needs a reason, offers common ones and posts the scan ids', async () => {
+    const fetch = mockFetch({ '/api/inspection/scans/void': { voided: 1, skipped: 0 } })
+    const wrapper = mount(VoidDialog, { props: { request: null }, attachTo: document.body })
+    await wrapper.setProps({ request: { scans: [counting], restore: false } })
+    expect(wrapper.find('h2').text()).toBe('Void #SCN-C1')
+    expect(wrapper.text()).toContain('Nothing is deleted')
+    await flushPromises()
+    expect(document.activeElement).toBe(wrapper.find('textarea').element)
+    const submit = () => wrapper.find('.modal-actions .primary-button')
+    expect(submit().attributes('disabled')).toBeDefined()
+    await wrapper.findAll('.reason-chips button').find(button => button.text() === 'Test object, not a bunch').trigger('click')
+    expect(submit().attributes('disabled')).toBeUndefined()
     await wrapper.find('form').trigger('submit')
     await flushPromises()
+    expect(fetch).toHaveBeenCalledWith('/api/inspection/scans/void', expect.objectContaining({ method: 'POST', body: JSON.stringify({ scan_ids: ['c1'], reason: 'Test object, not a bunch' }) }))
+    expect(wrapper.emitted('saved')).toHaveLength(1)
+    wrapper.unmount()
+  })
 
-    expect(fetch).toHaveBeenCalledWith('/api/inspection/scans/clear', expect.objectContaining({ method: 'POST', body: JSON.stringify({ confirm: 'CLEAR' }) }))
-    expect(wrapper.text()).toContain('Cleared 96 scans, 1 dispute, 96 photos and 3 shifts')
-    expect(wrapper.text()).toContain('banagrade-before-clear-1.db')
-    expect(wrapper.emitted('cleared')).toHaveLength(1)
+  it('VoidDialog counts a batch again and leaves out scans that already count', async () => {
+    const fetch = mockFetch({ '/api/inspection/scans/unvoid': { restored: 2, skipped: 0 } })
+    const wrapper = mount(VoidDialog, { props: { request: null } })
+    await wrapper.setProps({ request: { scans: [voided, counting, { ...voided, scan_id: 'v2' }], restore: true } })
+    expect(wrapper.find('h2').text()).toBe('Count 2 scans again')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ scan_ids: ['v1', 'v2'] })
   })
 })
 
@@ -400,7 +426,7 @@ describe('views', () => {
     expect(fetch).toHaveBeenCalledWith('/api/inspection/scans?limit=5000&session=active', expect.anything())
     expect(wrapper.find('h2').text()).toBe('Current shift')
     expect(wrapper.find('.result-count').text()).toBe('2 scans')
-    // Clearing every scan is not offered next to the everyday filters.
+    // Deleting scans is not offered at all; voiding is per row or for a narrowed list.
     expect(wrapper.text()).not.toContain('Clear all scans')
 
     await wrapper.find('select[aria-label="Filter by grade"]').setValue('Rejected')
@@ -447,12 +473,30 @@ describe('views', () => {
     expect(empty.findAll('.export-actions button').every(button => button.attributes('disabled') !== undefined)).toBe(true)
   })
 
-  it('System Status holds Clear all scans, with the counts it will delete', async () => {
-    const wrapper = mount(RecordsCard, { props: { shifts: SHIFTS } })
-    expect(wrapper.find('.records-summary').text()).toContain('Stored on the Pi: 100 scans in 2 shifts.')
-    await wrapper.find('.danger-zone button').trigger('click')
-    expect(wrapper.find('.primary-button.danger').text()).toBe('Delete 100 scans')
-    expect(mount(RecordsCard, { props: { shifts: [] } }).find('.danger-zone button').attributes('disabled')).toBeDefined()
+  it('History voids a narrowed list in one go, never all history unfiltered', async () => {
+    const items = [scan('a1', 'Class A'), scan('a2', 'Class B'), scan('v1', 'Rejected', { voided_at: '2026-10-27T06:40:00Z', void_reason: 'Test run' })]
+    mockFetch({ '/api/inspection/scans': { items }, '/api/sessions': { items: SHIFTS } })
+    const all = mount(HistoryView, { props: { scope: 'all' } })
+    await flushPromises()
+    expect(all.find('.result-count').text()).toBe('3 scans · 1 voided')
+    expect(all.find('.batch-action').exists()).toBe(false)
+
+    const shift = mount(HistoryView, { props: { scope: 'old' } })
+    await flushPromises()
+    await shift.find('.batch-action').trigger('click')
+    expect(shift.emitted('void')[0][0]).toEqual({ scans: [items[0], items[1]], restore: false })
+    await shift.find('select[aria-label="Filter by grade"]').setValue('Class A')
+    expect(shift.findAll('tbody tr')).toHaveLength(1)
+    await shift.find('select[aria-label="Filter by grade"]').setValue('Voided')
+    expect(shift.find('.result-count').text()).toBe('1 of 3 scans match')
+  })
+
+  it('System Status no longer offers to delete scans', async () => {
+    mockFetch({})
+    const wrapper = mount(SystemStatusView, { global: { stubs: { CameraCard: true } } })
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('Clear all scans')
+    wrapper.unmount()
   })
 
   it('Dashboard reports an unreachable API instead of showing totals', async () => {

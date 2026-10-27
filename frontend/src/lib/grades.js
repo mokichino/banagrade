@@ -9,11 +9,16 @@ export const GRADES = {
   Rejected: { key: 'r', label: 'Rejected', description: 'Unhealthy at Stage 1' }
 }
 
-export const GRADE_FILTERS = ['All', 'Class A', 'Class B', 'Rejected', 'Technical failure', 'Disputed']
+export const GRADE_FILTERS = ['All', 'Class A', 'Class B', 'Rejected', 'Technical failure', 'Disputed', 'Voided']
 
 export function scanLabel(scanId) {
   if (!scanId) return '—'
   return `#SCN-${String(scanId).replace(/-/g, '').slice(0, 6).toUpperCase()}`
+}
+
+/** Voided scans stay in the audit trail but count nowhere: no totals, rates, charts or drift. */
+export function isVoided(scan) {
+  return Boolean(scan?.voided_at)
 }
 
 export function isTechnicalFailure(scan) {
@@ -104,10 +109,14 @@ export function matchesSearch(scan, query) {
     .some(value => String(value || '').toLowerCase().includes(q))
 }
 
+// 'All' lists voided scans too (marked), since this is the audit trail; every other filter is about scans that count.
 export function matchesGrade(scan, filter) {
+  if (filter === 'All') return true
+  if (filter === 'Voided') return isVoided(scan)
+  if (isVoided(scan)) return false
   if (filter === 'Technical failure') return isTechnicalFailure(scan)
   if (filter === 'Disputed') return Boolean(scan.disputed)
-  return filter === 'All' || scan.final_grade === filter
+  return scan.final_grade === filter
 }
 
 export function formatDuration(seconds) {

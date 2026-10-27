@@ -113,9 +113,10 @@ Every variable, with its default, is listed in `backend/.env.example`. Productio
   "no bunch" photos taken on the rig (`PRESENCE_MODEL.md` step 1).
 - **The presence model's train/test split is unconfirmed.** If it used the Stage 1 split, the 225/225
   result is held-out. If those 225 photos were in its training set, the result is optimistic.
-- **No operator login.** Anyone on the local Wi-Fi can open the dashboard, start a shift and file
-  disputes. This is acceptable on a closed farm network. Add authentication before exposing the Pi to
-  a wider network.
+- **No operator login.** Anyone on the local Wi-Fi can open the dashboard, start a shift, file
+  disputes and void scans. This is acceptable on a closed farm network: nothing on the dashboard deletes
+  a scan, and every dispute and void can be undone. Add authentication before exposing the Pi to a
+  wider network.
 - **The physical checks are still open.** LED wiring, the 45 cm mount and lighting, brightness tuning
   on the black velvet, the acceptance test with known bunches, reboot and Wi-Fi recovery, and the §4.7
   sustained run are in `ON_SITE_TESTS.md`.

@@ -35,7 +35,8 @@ export function shiftTitle(shift) {
 
 /** A past shift as the pickers list it: name if any, when it ran, and how many scans it holds. */
 export function shiftOptionLabel(shift) {
-  return [shift.name, shiftRange(shift), plural(shift.scan_count ?? 0, 'scan')].filter(Boolean).join(' · ')
+  const voided = shift.voided_count ? `${shift.voided_count.toLocaleString()} voided` : ''
+  return [shift.name, shiftRange(shift), plural(shift.scan_count ?? 0, 'scan'), voided].filter(Boolean).join(' · ')
 }
 
 export function currentShift(shifts) {
@@ -44,7 +45,7 @@ export function currentShift(shifts) {
 
 /** Closed shifts worth choosing, newest first. Empty ones (restarts, test clean-ups) only clutter the list. */
 export function pastShifts(shifts) {
-  return shifts.filter(shift => shift.status !== 'open' && shift.scan_count > 0)
+  return shifts.filter(shift => shift.status !== 'open' && (shift.scan_count > 0 || shift.voided_count > 0))
 }
 
 /** The shift a picker value stands for: null for 'all', the open shift for 'active', else that past shift. */

@@ -16,6 +16,9 @@ from datetime import datetime
 from pathlib import Path
 
 TABLES = ("sessions", "scans", "scan_disputes")
+# Only the copies this script makes are pruned. Safety copies made by hand before risky changes
+# (banagrade-before-clear-*.db and the like) are kept, and do not take up any of the --keep slots.
+NIGHTLY = "banagrade-" + "[0-9]" * 8 + "-" + "[0-9]" * 6 + ".db"
 
 
 def counts(connection: sqlite3.Connection) -> dict[str, int]:
@@ -41,7 +44,7 @@ def backup(db: Path, dest: Path, keep: int) -> Path:
     if integrity != "ok" or actual != expected:
         target.unlink(missing_ok=True)
         raise RuntimeError(f"Backup verification failed: integrity={integrity}, expected {expected}, got {actual}")
-    for old in sorted(dest.glob("banagrade-*.db"))[:-keep]:
+    for old in sorted(dest.glob(NIGHTLY))[:-keep]:
         old.unlink()
     print(f"{target} ok {actual}")
     return target

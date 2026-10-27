@@ -635,9 +635,10 @@ class PresencePipeline:
             prepared = await asyncio.to_thread(self._stage1_image, image)
             stage1 = await asyncio.to_thread(self.inference.classify, prepared)
             await self._emit("stage1_completed", {"scan_id": scan_id, "confidence": stage1.confidence, "status": stage1.label})
-            if stage1.confidence < self.stage1_min_conf:
-                raise LowConfidence(f"Stage 1 confidence {stage1.confidence:.2f} is below {self.stage1_min_conf:.2f}")
             stage1_result = Stage1Result.HEALTHY if stage1.label.lower() == "healthy" else Stage1Result.UNHEALTHY
+            # Unhealthy is Rejected at any confidence (Section 3.5.4 Rule 1); only an unsure Healthy is checked by hand.
+            if stage1_result is Stage1Result.HEALTHY and stage1.confidence < self.stage1_min_conf:
+                raise LowConfidence(f"Stage 1 confidence {stage1.confidence:.2f} is below {self.stage1_min_conf:.2f}")
 
             stage2 = None
             width_ref = None

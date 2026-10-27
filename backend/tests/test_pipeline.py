@@ -115,18 +115,27 @@ def test_captured_frame_is_archived_for_disputes(tmp_path) -> None:
 
 
 def test_low_confidence_failure_keeps_stage1_result_and_frame(tmp_path) -> None:
-    scan, *_ = _run("Unhealthy", 2800.0, tmp_path, confidence=0.62)
+    scan, *_ = _run("Healthy", 2800.0, tmp_path, confidence=0.62)
     assert scan["processing_status"] == "failed"
     assert scan["rejection_reason"] == "LOW_CONFIDENCE"
     assert scan["final_grade"] is None
-    assert (scan["stage1_status"], scan["stage1_confidence"]) == ("Unhealthy", 0.62)
+    assert (scan["stage1_status"], scan["stage1_confidence"]) == ("Healthy", 0.62)
     assert (tmp_path / "frames" / f"{scan['scan_id']}.jpg").is_file()
 
 
+def test_an_unsure_unhealthy_result_is_still_rejected(tmp_path) -> None:
+    # On the rig, bruised market fruit came back Unhealthy at 0.55-0.79 and the operator rejected every one.
+    scan, pipeline, inference, *_ = _run("Unhealthy", 2800.0, tmp_path, confidence=0.55)
+    assert (scan["final_grade"], scan["rejection_reason"]) == ("Rejected", "SURFACE_UNHEALTHY")
+    assert scan["processing_status"] == "completed"
+    assert inference.stage2_calls == 0
+    assert pipeline.leds.state is LedState.REJECTED
+
+
 def test_an_unsure_scan_is_check_by_hand_not_a_system_fault(tmp_path) -> None:
-    scan, pipeline, _, events, _ = _run("Unhealthy", 2800.0, tmp_path, confidence=0.65)
+    scan, pipeline, _, events, _ = _run("Healthy", 2800.0, tmp_path, confidence=0.65)
     assert pipeline.leds.state is LedState.CHECK
-    assert pipeline._held_label == "Unsure: Unhealthy 65% (needs 80%) · check by hand"
+    assert pipeline._held_label == "Unsure: Healthy 65% (needs 80%) · check by hand"
     assert pipeline.last_error is None
     assert not [event for event in events if event["event_type"] == "pipeline_error"]
     assert scan["error_details"] == "Stage 1 confidence 0.65 is below 0.80"

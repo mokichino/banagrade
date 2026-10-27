@@ -38,14 +38,20 @@ Stage 2 alone if no presence model loads.
 
 ## Grading rule
 
-- Stage 1 Unhealthy → **Rejected**. Stage 2 does not run.
+- Stage 1 Unhealthy → **Rejected**, whatever its confidence. Stage 2 does not run.
 - Stage 1 Healthy → horizontal bounding-box width in the 4608×2592 frame. **≥ 2730.07 px is Class A**,
   otherwise **Class B**.
-- Stage 1 confidence below 0.80, no Stage 2 box or a box below 0.90 confidence, or a runtime error →
-  **technical failure**. Every held-out Class A/B bunch scored at least 0.96 on Stage 2. A flat hand on
-  a desk passed the trigger and Stage 1 (0.807) and was graded Class A from a 0.75 box. The 0.90 gate
-  stops that without losing any held-out bunch. It is
+- Stage 1 Healthy below 0.80 confidence, no Stage 2 box or a box below 0.90 confidence, or a runtime
+  error → **technical failure** ("check by hand"). Every held-out Class A/B bunch scored at least 0.96
+  on Stage 2. A flat hand on a desk passed the trigger and Stage 1 (0.807) and was graded Class A from
+  a 0.75 box. The 0.90 gate stops that without losing any held-out bunch. A technical failure is
   stored and shown, but excluded from acceptance and rejection rates.
+- Until 2026-10-27 an Unhealthy result below 0.80 was also a technical failure. On the rig five
+  Unhealthy results fell below 0.80 (0.55–0.79): two in the first shift (market fruit) and three in
+  the second (green, mature bunches), where the operator rejected all three for black spots, bruises
+  or lesions. The team then changed the rule. The five stored scans were re-graded to Rejected (their
+  `error_details` say so; backup `banagrade-before-unhealthy-regrade-20261027-225239.db`). On the
+  225 test photos nothing changes: the only result below 0.80 is a Healthy one (Class_B_771, 0.784).
 
 The 2730.07 px threshold was chosen on the validation set only. Out of 151 candidate boundaries it had
 the highest macro-F1 (0.806); the test set was not used to choose it. It is an image-space boundary,
@@ -79,7 +85,7 @@ Every variable, with its default, is listed in `backend/.env.example`. Productio
 | Variable | Default | Effect |
 |---|---|---|
 | `BANAGRADE_WIDTH_THRESHOLD_PX` | 2730.07 | Class A / B boundary |
-| `BANAGRADE_STAGE1_MIN_CONF` | 0.80 | Below this, a scan is a technical failure |
+| `BANAGRADE_STAGE1_MIN_CONF` | 0.80 | A Healthy result below this is a technical failure. Unhealthy is Rejected at any confidence. |
 | `BANAGRADE_STAGE2_MIN_CONF` | 0.90 | A Stage 2 box below this is a technical failure, not a grade |
 | `BANAGRADE_STAGE1_MASK` | 0 | HSV mask before Stage 1. Keep at 0: the model was trained on raw frames and masking lowers test accuracy to 0.911. |
 | `BANAGRADE_MIN_BRIGHTNESS`, `BANAGRADE_MIN_CONTRAST` | 8, 1.5 | Fast-red "camera blocked / poor lighting" error. Tune on site. |

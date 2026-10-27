@@ -56,6 +56,7 @@ Last updated: 2026-10-25.
 - [x] Keep camera frames OpenCV/Ultralytics-compatible (Picamera2 `RGB888` gives BGR arrays). Verified visually on the live preview.
 - [x] Persist model names, both confidences, timings, the threshold, and the rejection reason for every scan.
 - [x] Record low Stage 1 confidence, missing detections, and runtime errors as technical failures, never as commercial rejects.
+- [x] The Stage 1 confidence gate applies to Healthy results only; Unhealthy is Rejected at any confidence (decided 2026-10-27, `test_pipeline.py::test_an_unsure_unhealthy_result_is_still_rejected`). On the 225 test photos the only result below 0.80 is Healthy, so the held-out results do not change.
 - [x] A Stage 2 box below 0.90 confidence is a technical failure, not a grade (`BANAGRADE_STAGE2_MIN_CONF`). On 2026-10-25 a flat hand on a desk passed the trigger (backup banana 0.53, no "person" seen because the arm was out of frame) and Stage 1 (Healthy 0.807), and was graded Class A from a 0.75 box spanning hand, laptop and desk. All 150 held-out A/B bunches score ≥ 0.96 through the app code, and the archived hand frame scores 0.77 (`test_pipeline.py::test_weak_stage2_box…`).
 - [x] Pipeline survives camera or model errors: retries every 10 s with the fast-red LED.
 - [x] Deployed weights match the final training runs (SHA-256 identical to `runs/stage1_final` and `runs/stage2_final` `best.pt`).

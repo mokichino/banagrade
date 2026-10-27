@@ -40,11 +40,11 @@ fingers yet measure narrow when its fingers curl inward or it has few of them.
    back and 3.6° to the side after adjustment: the same bunch looked up to 15% wider at the bottom of the view
    than at the top. Use **Check camera alignment** on the camera card with the sheet in the middle and adjust
    until both tilts read "Level".
-4. **Decide the rule for doubtful Stage 1 results.** Recommended: reject any Unhealthy result regardless of
-   confidence (thesis rule "Unhealthy → Rejected"), and keep "check by hand" only for a Healthy result below
-   0.80. On the 225 test photos this changes nothing (no healthy bunch rejected); on the rig it would have
-   rejected the "Unhealthy 65%" and "Unhealthy 54%" bunches. Not applied yet: it is a grading-rule change for
-   the team to agree on and to state in the thesis.
+4. **Done 2026-10-27: doubtful Stage 1 results.** An Unhealthy result is now Rejected at any confidence
+   (thesis rule "Unhealthy → Rejected"), and "check by hand" is kept only for a Healthy result below 0.80. On
+   the 225 test photos this changes nothing (the only result below 0.80 is Healthy). The five stored
+   Unhealthy scans below 0.80 (0.55–0.79) were re-graded to Rejected. Still to do: state the rule in the
+   thesis (§3.5.4 and the runtime-safeguards subsection).
 
 ## Models and training data
 
@@ -60,10 +60,11 @@ fingers yet measure narrow when its fingers curl inward or it has few of them.
    photos taken on the rig (paper, hands, a phone, the tape measure, tools), each with an empty label file. The
    paper and hand frames already in the retraining folder are a start. A flat, still palm seen from above
    (COCO "person" 0.09) can still reach Stage 2, where the 0.90 box minimum turns it into a technical failure.
-7. **The on-site tests so far used market fruit, not fresh harvest-mature bunches.** Size (A/B) can still be
-   evaluated against measured finger length; health screening cannot, because ripening is outside the
-   training data. Run a second test with fresh green Cardava and record it separately. In the thesis, say which
-   fruit each test used.
+7. **Say which fruit each on-site test used.** The first shift (27 Oct, 95 bunches) used market-bought,
+   ripening fruit from Toril; size (A/B) can still be checked against measured finger length, but health
+   screening cannot, because ripening is outside the training data. The second shift (27 Oct afternoon,
+   38 bunches) used green, mature bunches and should be reported separately. The acceptance test with
+   hand-labelled bunches (`ON_SITE_TESTS.md` §4) is still open.
 
 ## Camera and lighting
 

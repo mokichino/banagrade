@@ -105,8 +105,14 @@ watch(pages, count => { page.value = Math.min(page.value, count) })
     <div class="result-bar">
       <p class="muted small result-count" aria-live="polite">{{ countText }}</p>
       <button v-if="filtering" class="text-button" @click="clearFilters">Clear filters</button>
-      <button v-if="gradeFilter === 'Voided' && listedVoided.length > 1" class="text-button batch-action" @click="$emit('void', { scans: listedVoided, restore: true })">Count all {{ listedVoided.length.toLocaleString() }} again…</button>
-      <button v-else-if="batchVoid" class="text-button batch-action" @click="$emit('void', { scans: listedCounting, restore: false })">Void all {{ listedCounting.length.toLocaleString() }} listed…</button>
+      <button v-if="gradeFilter === 'Voided' && listedVoided.length > 1" class="secondary-button batch-action" :title="`Count all ${listedVoided.length.toLocaleString()} voided scans in this list again, on every page`" @click="$emit('void', { scans: listedVoided, restore: true })">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 2.6-6.4L3 8" /><path d="M3 3v5h5" /></svg>
+        Count {{ plural(listedVoided.length, 'scan') }} again…
+      </button>
+      <button v-else-if="batchVoid" class="secondary-button batch-action" :title="`Void all ${listedCounting.length.toLocaleString()} scans in this list, on every page`" @click="$emit('void', { scans: listedCounting, restore: false })">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9" /><path d="M5.6 5.6l12.8 12.8" /></svg>
+        Void {{ plural(listedCounting.length, 'scan') }}…
+      </button>
     </div>
     <ScanTable :scans="pageRows" :empty-text="emptyText" @select="$emit('select', $event)" @dispute="$emit('dispute', $event)" @void="$emit('void', $event)" />
     <p v-if="truncated" class="muted small table-note">Only the newest {{ LIMIT.toLocaleString() }} scans are loaded. Choose one shift to see older ones.</p>

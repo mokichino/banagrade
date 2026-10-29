@@ -1,7 +1,9 @@
 """Deterministic grading contract.
 
 Thesis traceability:
-- Section 3.5.4 Rule 1: an Unhealthy Stage 1 result terminates the pipeline as Rejected.
+- Section 3.5.4 Rule 1: an Unhealthy Stage 1 result terminates the pipeline as Rejected,
+  whatever its confidence. Only a Healthy result below BANAGRADE_STAGE1_MIN_CONF is held
+  for a hand check (pipeline.py).
 - Sections 3.5.3 / 3.7.6 / 4.4.3: healthy bunches are graded by the horizontal
   whole-bunch bounding-box width measured in the original 4608 x 2592 image
   coordinate system. The frozen, validation-selected threshold is 2730.07 px:
@@ -34,6 +36,7 @@ class RejectionReason(StrEnum):
     CAMERA_ERROR = "CAMERA_ERROR"
     ILLUMINATION_ERROR = "ILLUMINATION_ERROR"
     PIPELINE_ERROR = "PIPELINE_ERROR"
+    NOT_A_BUNCH = "NOT_A_BUNCH"
     # Retained so rows written by earlier cm-based builds still render.
     UNDERSIZED = "UNDERSIZED"
     CALIBRATION_INVALID = "CALIBRATION_INVALID"

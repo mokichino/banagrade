@@ -74,6 +74,31 @@ def stage1_input(bgr: Any, settings: MaskSettings | None = None) -> Any:
     return apply_mask(bgr, hsv_mask(bgr, settings))
 
 
+def banana_share(bgr: Any, box: tuple[float, float, float, float] | None = None) -> float:
+    """Share of the box (or the whole frame) in banana colours: OpenCV hue 5-55 (brown, yellow, green), saturation >= 25.
+
+    Measured inside the trigger's box, so things beside the bunch do not count, and by hue, so a colour cast
+    does not: on 2026-10-27 auto white balance turned the paper light blue and a saturation-only check read it
+    as 91% coloured. All 344 dataset bunches scored at least 0.276 (median 0.63); every paper frame, blue-tinted
+    or not, scored 0.004 or less. Skin is in this hue range too (a hand scored 0.30), so hands are left to the
+    COCO hand check.
+    """
+    import cv2
+
+    if box is not None:
+        height, width = bgr.shape[:2]
+        x1, y1, x2, y2 = (int(round(value)) for value in box)
+        bgr = bgr[max(0, y1):min(height, y2), max(0, x1):min(width, x2)]
+        if bgr.size == 0:
+            return 0.0
+    height, width = bgr.shape[:2]
+    if width > 640:
+        bgr = cv2.resize(bgr, (640, max(1, round(height * 640 / width))), interpolation=cv2.INTER_AREA)
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    hue, saturation, value = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    return float(((hue >= 5) & (hue <= 55) & (saturation >= 25) & (value >= 40)).mean())
+
+
 @dataclass(frozen=True, slots=True)
 class FrameHealth:
     status: str  # "ok" | "dark" | "obstructed"

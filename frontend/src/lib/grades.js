@@ -4,16 +4,21 @@
 export const WIDTH_THRESHOLD_PX = 2730.07
 
 export const GRADES = {
-  'Class A': { key: 'a', label: 'Class A', description: 'Large hand (≥ 12 cm)' },
-  'Class B': { key: 'b', label: 'Class B', description: 'Small hand (8–12 cm)' },
+  'Class A': { key: 'a', label: 'Class A', description: 'Large hand (width ≥ 2730.07 px)' },
+  'Class B': { key: 'b', label: 'Class B', description: 'Small hand (width < 2730.07 px)' },
   Rejected: { key: 'r', label: 'Rejected', description: 'Unhealthy at Stage 1' }
 }
 
-export const GRADE_FILTERS = ['All', 'Class A', 'Class B', 'Rejected']
+export const GRADE_FILTERS = ['All', 'Class A', 'Class B', 'Rejected', 'Technical failure', 'Disputed', 'Voided']
 
 export function scanLabel(scanId) {
   if (!scanId) return '—'
   return `#SCN-${String(scanId).replace(/-/g, '').slice(0, 6).toUpperCase()}`
+}
+
+/** Voided scans stay in the audit trail but count nowhere: no totals, rates, charts or drift. */
+export function isVoided(scan) {
+  return Boolean(scan?.voided_at)
 }
 
 export function isTechnicalFailure(scan) {
@@ -22,6 +27,36 @@ export function isTechnicalFailure(scan) {
 
 export function finalGradeLabel(scan) {
   return isTechnicalFailure(scan) ? 'Technical failure' : scan.final_grade
+}
+
+const REASONS = { SURFACE_UNHEALTHY: 'Unhealthy at Stage 1' }
+
+/** Why a scan was not graded, in plain words; '' for a graded scan. Thresholds come from the stored error text. */
+export function failureReason(scan) {
+  if (!scan) return ''
+  if (!isTechnicalFailure(scan)) return REASONS[scan.rejection_reason] || ''
+  const limit = String(scan.error_details || '').match(/below (\d+(?:\.\d+)?)/)
+  const needs = limit ? ` (needs ${Math.round(Number(limit[1]) * 100)}%)` : ''
+  const percent = value => `${Math.round(Number(value) * 100)}%`
+  switch (scan.rejection_reason) {
+    case 'LOW_CONFIDENCE':
+      return `Unsure: ${scan.stage1_status || 'Stage 1'} ${percent(scan.stage1_confidence)}${needs} · check by hand`
+    case 'DETECTION_FAILED':
+      return scan.stage2_confidence != null ? `Not measured: outline ${percent(scan.stage2_confidence)}${needs} · check by hand` : 'Not measured: no outline found · check by hand'
+    case 'NOT_A_BUNCH':
+      return 'Not a bunch: no banana colour'
+    case 'PIPELINE_ERROR':
+      return `Scan error: ${scan.error_details || 'see System Status'}`
+    default:
+      return scan.error_details || ''
+  }
+}
+
+/** Hover text for the Disputed badge: what the model said and the latest reason. */
+export function disputeSummary(scan) {
+  if (!scan?.disputed) return ''
+  const model = scan.model_grade ? `Model graded ${scan.model_grade === 'Technical Failure' ? 'Technical failure' : scan.model_grade}` : 'Disputed'
+  return scan.dispute_reason ? `${model} · ${scan.dispute_reason}` : model
 }
 
 export function finalGradeKey(scan) {
@@ -36,10 +71,12 @@ export function isHealthy(scan) {
   return String(scan?.stage1_status || '').toLowerCase() === 'healthy'
 }
 
-/** Stage 2 only runs for Healthy bunches; anything else is N/A (thesis 3.5.4 Rule 1). */
+/** Stage 2 only runs for Healthy bunches; anything else is N/A (thesis 3.5.4 Rule 1). A dispute corrects the final
+ * grade, not what Stage 2 measured, so a disputed scan shows the scanner's own grade here. */
 export function stage2Label(scan) {
   if (!isHealthy(scan)) return 'N/A'
-  return scan.final_grade === 'Class A' || scan.final_grade === 'Class B' ? scan.final_grade : 'N/A'
+  const grade = scan.disputed && scan.model_grade ? scan.model_grade : scan.final_grade
+  return grade === 'Class A' || grade === 'Class B' ? grade : 'N/A'
 }
 
 export function confidencePercent(value) {
@@ -59,6 +96,12 @@ export function formatTimestamp(iso) {
   return date.toLocaleString(undefined, { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
 }
 
+/** A percentage (25.81) as the dashboard shows rates: one decimal, none when whole. A shift's sample is too small for more. */
+export function formatPercent(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return '—'
+  return `${Number(Number(value).toFixed(1))}%`
+}
+
 export function matchesSearch(scan, query) {
   const q = query.trim().toLowerCase()
   if (!q) return true
@@ -66,8 +109,14 @@ export function matchesSearch(scan, query) {
     .some(value => String(value || '').toLowerCase().includes(q))
 }
 
+// 'All' lists voided scans too (marked), since this is the audit trail; every other filter is about scans that count.
 export function matchesGrade(scan, filter) {
-  return filter === 'All' || scan.final_grade === filter
+  if (filter === 'All') return true
+  if (filter === 'Voided') return isVoided(scan)
+  if (isVoided(scan)) return false
+  if (filter === 'Technical failure') return isTechnicalFailure(scan)
+  if (filter === 'Disputed') return Boolean(scan.disputed)
+  return scan.final_grade === filter
 }
 
 export function formatDuration(seconds) {

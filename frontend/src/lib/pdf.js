@@ -1,16 +1,16 @@
 import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
-import { WIDTH_THRESHOLD_PX, finalGradeLabel, formatConfidence, formatTimestamp, scanLabel, stage1Label, stage2Label } from './grades.js'
+import { WIDTH_THRESHOLD_PX, failureReason, finalGradeLabel, formatConfidence, formatTimestamp, isVoided, scanLabel, stage1Label, stage2Label } from './grades.js'
 
 const FILLS = { 'Class A': [255, 241, 196], 'Class B': [219, 234, 254], Rejected: [254, 226, 226] }
 
-export function buildScansPdf(scans, { filter = 'All', search = '', generated = new Date() } = {}) {
+export function buildScansPdf(scans, { filter = 'All', search = '', shift = 'All shifts', generated = new Date() } = {}) {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' })
   doc.setFontSize(15)
-  doc.text('BananaGrade AI Sorting System — Scan Audit Log', 40, 44)
+  doc.text('Banagrade AI Sorting System — Scan Audit Log', 40, 44)
   doc.setFontSize(9)
   doc.setTextColor(90)
-  doc.text(`Generated ${formatTimestamp(generated.toISOString())} · ${scans.length} records · Filter: ${filter}${search ? ` · Search: "${search}"` : ''}`, 40, 62)
+  doc.text(`Generated ${formatTimestamp(generated.toISOString())} · ${scans.length} records · Shift: ${shift} · Filter: ${filter}${search ? ` · Search: "${search}"` : ''}`, 40, 62)
   doc.text(`Stage 1: stage1_best.pt (YOLO11n-cls) · Stage 2: stage2_best.pt (YOLO11n) · Class A when bbox width ≥ ${WIDTH_THRESHOLD_PX} px (4608×2592 frame)`, 40, 76)
   autoTable(doc, {
     startY: 90,
@@ -22,8 +22,8 @@ export function buildScansPdf(scans, { filter = 'All', search = '', generated = 
       stage2Label(scan),
       formatConfidence(scan.stage1_confidence),
       formatConfidence(scan.stage2_confidence),
-      finalGradeLabel(scan),
-      scan.rejection_reason || ''
+      isVoided(scan) ? `${finalGradeLabel(scan)} (voided)` : finalGradeLabel(scan),
+      isVoided(scan) ? `Voided: ${scan.void_reason}` : failureReason(scan) || scan.rejection_reason || ''
     ]),
     styles: { fontSize: 8, cellPadding: 4 },
     headStyles: { fillColor: [17, 24, 39] },

@@ -4,7 +4,8 @@ import { computed } from 'vue'
 const props = defineProps({ models: { type: Object, default: null } })
 const STATE_LABEL = { loaded: 'Loaded', missing: 'Missing', error: 'Error' }
 const entries = computed(() => props.models?.models || [])
-const presence = computed(() => (props.models?.presence_source === 'dedicated' ? 'Dedicated YOLO11n-presence model' : 'Stage 2 banana_bunch detector'))
+const STAGE = { stage1: 'Stage 1', stage2: 'Stage 2', presence: 'Capture trigger', objects: 'Before capture' }
+const INPUT = { stage1: 'Raw RGB, whole frame resized to 224 × 224', stage2: 'Raw RGB, 640 × 640 letterbox', presence: '640 × 360 preview, 640 letterbox', objects: '640 × 360 preview, 640 letterbox' }
 </script>
 
 <template>
@@ -22,10 +23,10 @@ const presence = computed(() => (props.models?.presence_source === 'dedicated' ?
           <span :class="['status-badge', model.state]">{{ STATE_LABEL[model.state] }}</span>
         </div>
         <dl class="kv-grid">
-          <dt>Stage</dt><dd>{{ model.key === 'stage1' ? 'Stage 1' : 'Stage 2' }}</dd>
+          <dt>Stage</dt><dd>{{ STAGE[model.key] }}</dd>
           <dt>Architecture</dt><dd>{{ model.architecture }}</dd>
           <dt>Task</dt><dd>{{ model.task }}</dd>
-          <dt>Input</dt><dd>{{ model.key === 'stage1' ? 'HSV-masked RGB, 224 × 224' : 'Raw RGB, 640 × 640 letterbox' }}</dd>
+          <dt>Input</dt><dd>{{ INPUT[model.key] }}</dd>
         </dl>
       </div>
     </div>
@@ -33,7 +34,7 @@ const presence = computed(() => (props.models?.presence_source === 'dedicated' ?
       <dt>Empirical threshold</dt><dd><b>{{ models?.empirical_threshold_px ?? 2730.07 }} px</b></dd>
       <dt>Measurement</dt><dd>Horizontal bbox {{ models?.length_axis || 'width' }} in the 4608 × 2592 frame</dd>
       <dt>Decision</dt><dd>≥ threshold → Class A · below → Class B · Unhealthy → Rejected</dd>
-      <dt>Capture trigger</dt><dd>{{ presence }}</dd>
+      <dt>Capture trigger</dt><dd>{{ models?.trigger || 'Stage 2 detector' }} · 400 ms stability check</dd>
     </dl>
   </div>
 </template>

@@ -1,0 +1,10 @@
+// Lets the Banagrade service reboot or shut down the Pi from the System Status page.
+// Install: sudo cp deploy/50-banagrade-power.rules /etc/polkit-1/rules.d/
+// Only the banagrade service user is allowed, including while someone is logged in over SSH
+// (-multiple-sessions) and while another program holds an inhibitor lock (-ignore-inhibit).
+polkit.addRule(function (action, subject) {
+  if (subject.user === "banagrade" &&
+      /^org\.freedesktop\.login1\.(reboot|power-off)(-multiple-sessions|-ignore-inhibit)?$/.test(action.id)) {
+    return polkit.Result.YES;
+  }
+});

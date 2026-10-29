@@ -48,11 +48,11 @@ def generate_scan(
         "threshold_values": {"width_threshold_px": threshold, "reference_resolution": list(REFERENCE_RESOLUTION), "axis": "width"},
     }
     roll = rng.random()
-    if roll < 0.012:  # rare technical failure: low Stage 1 confidence
+    if roll < 0.012:  # rare technical failure: low Stage 1 confidence (Healthy only; Unhealthy is always Rejected)
         conf = rng.uniform(0.55, 0.79)
         latency = rng.gauss(620, 80)
         record.update({
-            "stage1_status": rng.choice(["Healthy", "Unhealthy"]),
+            "stage1_status": "Healthy",
             "stage1_confidence": conf,
             "processing_status": "failed",
             "rejection_reason": "LOW_CONFIDENCE",

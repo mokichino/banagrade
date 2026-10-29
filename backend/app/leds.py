@@ -24,6 +24,9 @@ class LedState(StrEnum):
     CLASS_B = "class_b"
     REJECTED = "rejected"
     ERROR = "error"
+    # A scan that could not be graded (unsure Stage 1, no measurable outline, not a bunch). The floor sees the same
+    # fast red blink as ERROR (thesis 3.6.5); only the dashboard tells them apart, so this is not shown as a fault.
+    CHECK = "check"
 
 
 GRADE_TO_LED = {"Class A": LedState.CLASS_A, "Class B": LedState.CLASS_B, "Rejected": LedState.REJECTED}
@@ -103,7 +106,7 @@ class LedController:
             out["red"].on()
         elif state is LedState.BOOTING:
             out["red"].blink(on_time=0.8, off_time=0.8)
-        elif state is LedState.ERROR:
+        elif state in (LedState.ERROR, LedState.CHECK):
             out["red"].blink(on_time=0.12, off_time=0.12)
         elif state is LedState.CAPTURE:
             for output in out.values():

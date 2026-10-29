@@ -4,7 +4,7 @@ Banagrade is a local-first Cardava banana screening and size grading application
 
 ## Current architecture
 
-The system implements the thesis *A Two-Stage Deep Learning System for Cardava Banana Disease Detection and Quality Classification with Operational Analytics Dashboard*. `docs/QUALITY_CHECKLIST.md` maps every feature to its thesis section.
+The system implements the thesis *A Two-Stage Deep Learning System for Cardava Banana Disease Detection and Quality Classification with Operational Analytics Dashboard*.
 
 - `backend/app/grading.py` is the authoritative grading contract. Stage 1 Unhealthy means Rejected, at any confidence; a Healthy result below 0.80 is held for a hand check. Healthy bunches are graded by horizontal bounding-box width in the 4608×2592 frame: **≥ 2730.07 px is Class A, otherwise Class B** (thesis §4.4.3). The threshold is an image-space boundary, not a centimetre measurement.
 - Both models receive the raw frame, as they were trained. Stage 1 squashes the whole frame to 224×224. `backend/app/preprocessing.py` keeps the RGB-to-HSV mask from §3.3.7, but it is off by default (`BANAGRADE_STAGE1_MASK=1`), because in training the mask was only used to generate the Stage 2 bounding-box labels.

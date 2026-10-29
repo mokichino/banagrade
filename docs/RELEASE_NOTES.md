@@ -1,8 +1,7 @@
 # Banagrade 1.0.0 release note
 
 Released 2026-10-25 for the Raspberry Pi 5 edge deployment (`cardavapi`). This note records what is
-deployed, how it was verified and what it does not do. `QUALITY_CHECKLIST.md` traces each feature to
-the thesis.
+deployed, how it was verified and what it does not do.
 
 ## Models
 
@@ -115,17 +114,17 @@ Every variable, with its default, is listed in `backend/.env.example`. Productio
   trained on photos of the velvet rig, and whether its training set included "no bunch" photos (empty
   velvet, hands, tools) has not been confirmed. A false trigger costs at most a technical failure: a
   hand cannot be graded Class A or B because grading needs a Stage 2 box of 0.90 or more. Measure it on
-  the rig (`ON_SITE_TESTS.md` §3). If it fires on the empty velvet or on hands there, retrain it with
-  "no bunch" photos taken on the rig (`PRESENCE_MODEL.md` step 1).
+  the rig. If it fires on the empty velvet or on hands there, retrain it with "no bunch" photos taken
+  on the rig.
 - **The presence model's train/test split is unconfirmed.** If it used the Stage 1 split, the 225/225
   result is held-out. If those 225 photos were in its training set, the result is optimistic.
 - **No operator login.** Anyone on the local Wi-Fi can open the dashboard, start a shift, file
   disputes and void scans. This is acceptable on a closed farm network: nothing on the dashboard deletes
   a scan, and every dispute and void can be undone. Add authentication before exposing the Pi to a
   wider network.
-- **The physical checks are still open.** LED wiring, the 45 cm mount and lighting, brightness tuning
+- **The physical checks are still open:** LED wiring, the 45 cm mount and lighting, brightness tuning
   on the black velvet, the acceptance test with known bunches, reboot and Wi-Fi recovery, and the §4.7
-  sustained run are in `ON_SITE_TESTS.md`.
+  sustained run.
 - **Class A / B errors cluster at the threshold.** 15.3% of test bunches (23 of 150) were graded wrong.
   17 of the 23 were within 200 px of 2730.07 px, and the furthest was 574 px away. Disputes are the remedy, and the drift indicator
   only warns above 25%.

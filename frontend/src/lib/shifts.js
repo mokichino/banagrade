@@ -1,9 +1,9 @@
-// How shifts are named and listed. A shift goes by the name the operator typed, otherwise by when it ran:
-// automatic shifts all share the same note ("Shift opened automatically at startup"), which says nothing to tell them apart.
+// How shifts are named and listed. There is one shift per day, opened and closed by the service, so a shift goes by
+// the name the operator typed, otherwise by its date.
 
 const MINUTE = 60_000
 const DAY_TIME = { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }
-const TIME = { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }
+const DATE = { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }
 
 export function plural(count, word) {
   return `${Number(count || 0).toLocaleString()} ${word}${count === 1 ? '' : 's'}`
@@ -13,12 +13,9 @@ export function shiftStart(shift) {
   return new Date(shift.started_at).toLocaleString(undefined, DAY_TIME)
 }
 
-/** "Oct 27, 02:48 – 13:30", "Oct 26, 18:00 – Oct 27, 05:30", or "Oct 27, 13:46 – now" for the open shift. */
-export function shiftRange(shift) {
-  if (!shift.ended_at) return `${shiftStart(shift)} – now`
-  const start = new Date(shift.started_at)
-  const end = new Date(shift.ended_at)
-  return `${shiftStart(shift)} – ${end.toLocaleString(undefined, start.toDateString() === end.toDateString() ? TIME : DAY_TIME)}`
+/** The day a shift covers, e.g. "Tue, Oct 27, 2026". */
+export function shiftDate(shift) {
+  return new Date(shift.started_at).toLocaleDateString(undefined, DATE)
 }
 
 export function shiftDuration(shift, now = Date.now()) {
@@ -30,20 +27,20 @@ export function shiftDuration(shift, now = Date.now()) {
 }
 
 export function shiftTitle(shift) {
-  return shift.name || shiftRange(shift)
+  return shift.name || shiftDate(shift)
 }
 
-/** A past shift as the pickers list it: name if any, when it ran, and how many scans it holds. */
+/** A past shift as the pickers list it: name if any, its date, and how many scans it holds. */
 export function shiftOptionLabel(shift) {
   const voided = shift.voided_count ? `${shift.voided_count.toLocaleString()} voided` : ''
-  return [shift.name, shiftRange(shift), plural(shift.scan_count ?? 0, 'scan'), voided].filter(Boolean).join(' · ')
+  return [shift.name, shiftDate(shift), plural(shift.scan_count ?? 0, 'scan'), voided].filter(Boolean).join(' · ')
 }
 
 export function currentShift(shifts) {
   return shifts.find(shift => shift.status === 'open') || null
 }
 
-/** Closed shifts worth choosing, newest first. Empty ones (restarts, test clean-ups) only clutter the list. */
+/** Closed shifts worth choosing, newest first. Empty ones (from before shifts were daily) only clutter the list. */
 export function pastShifts(shifts) {
   return shifts.filter(shift => shift.status !== 'open' && (shift.scan_count > 0 || shift.voided_count > 0))
 }

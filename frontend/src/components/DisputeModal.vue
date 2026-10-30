@@ -41,7 +41,10 @@ async function submit() {
   try {
     await request(`/api/inspection/scans/${props.scan.scan_id}/dispute`, { method: 'POST', body: JSON.stringify({ reason: reason.value || null, corrected_grade: correctedGrade.value }) })
     emit('saved')
-  } catch (error) { emit('error', `Unable to save dispute: ${error.message}`) } finally { saving.value = false }
+  } catch (error) {
+    emit('error', `Unable to save dispute: ${error.message}`)
+    if (error.status === 409) emit('changed')  // a stale list, e.g. the shift ended since it loaded
+  } finally { saving.value = false }
 }
 
 async function deleteDisputes() {
@@ -53,7 +56,10 @@ async function deleteDisputes() {
     confirming.value = false
     disputes.value = []
     emit('changed')
-  } catch (error) { emit('error', `Unable to delete disputes: ${error.message}`) } finally { deleting.value = false }
+  } catch (error) {
+    emit('error', `Unable to delete disputes: ${error.message}`)
+    if (error.status === 409) emit('changed')
+  } finally { deleting.value = false }
 }
 </script>
 

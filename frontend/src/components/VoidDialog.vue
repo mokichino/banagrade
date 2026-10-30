@@ -1,13 +1,14 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
 import { request as api } from '../composables/useApi.js'
-import { finalGradeLabel, formatTimestamp, isVoided, scanLabel } from '../lib/grades.js'
+import { finalGradeLabel, formatTimestamp, isReadOnly, isVoided, scanLabel } from '../lib/grades.js'
 import { plural } from '../lib/shifts.js'
 
 // Voiding is how a scan is taken out of the numbers: it stays in the audit trail, marked, and can be counted again.
 // `request` is { scans, restore }: restore false voids the listed scans that count, true counts the voided ones again.
+// Scans from a closed shift are read-only and left out.
 const props = defineProps({ request: { type: Object, default: null } })
-const emit = defineEmits(['close', 'saved'])
+const emit = defineEmits(['close', 'saved', 'changed'])
 const REASONS = ['Duplicate scan of the same bunch', 'Test object, not a bunch', 'Test run', 'Scanned by mistake']
 const reason = ref('')
 const busy = ref(false)
@@ -15,7 +16,7 @@ const error = ref('')
 const first = ref(null)
 
 const restoring = computed(() => Boolean(props.request?.restore))
-const scans = computed(() => (props.request?.scans || []).filter(scan => isVoided(scan) === restoring.value))
+const scans = computed(() => (props.request?.scans || []).filter(scan => isVoided(scan) === restoring.value && !isReadOnly(scan)))
 const single = computed(() => (scans.value.length === 1 ? scans.value[0] : null))
 const what = computed(() => (single.value ? scanLabel(single.value.scan_id) : plural(scans.value.length, 'scan')))
 const ready = computed(() => scans.value.length > 0 && (restoring.value || reason.value.trim().length >= 3))
@@ -40,6 +41,7 @@ async function save() {
     emit('saved')
   } catch (failure) {
     error.value = `${restoring.value ? 'Unable to count again' : 'Unable to void'}: ${failure.message}`
+    if (failure.status === 409) emit('changed')  // the list is stale: a shift has ended since it loaded
   } finally { busy.value = false }
 }
 

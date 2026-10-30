@@ -1,8 +1,12 @@
 import os
 import time
+from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+
+from app.storage import now_iso
 
 pytest.importorskip("httpx")
 
@@ -49,12 +53,13 @@ def test_telemetry_and_shift_scoped_analytics(client) -> None:
     daily = test_client.get("/api/analytics/trend?session=active&bucket_minutes=1440&utc_offset_minutes=480").json()
     assert daily["items"][0]["bucket_start"] == "2026-10-12T16:00:00+00:00"
     assert test_client.get("/api/analytics/trend?utc_offset_minutes=900").status_code == 422
-    new = test_client.post("/api/sessions", json={"name": "afternoon"}).json()
-    assert (new["name"], new["notes"]) == ("afternoon", "Shift started from dashboard")
+    # The next day's shift opens on its own; yesterday's stays viewable by its id.
+    api.storage.close_session(session["id"])
+    new = test_client.get("/api/sessions/active").json()["session"]
+    assert new["id"] != session["id"]
+    assert test_client.patch(f"/api/sessions/{new['id']}", json={"name": "afternoon"}).json()["name"] == "afternoon"
     assert test_client.get("/api/analytics/summary?session=active").json()["total_scans"] == 0
-    assert test_client.get("/api/sessions/active").json()["session"]["id"] == new["id"]
 
-    # A past shift stays viewable by its id.
     assert [scan["scan_id"] for scan in test_client.get(f"/api/inspection/scans?session={session['id']}").json()["items"]] == ["s1"]
     assert test_client.get("/api/inspection/scans?session=active").json()["items"] == []
     assert test_client.get(f"/api/analytics/summary?session={session['id']}").json()["rejected_count"] == 1
@@ -64,33 +69,91 @@ def test_telemetry_and_shift_scoped_analytics(client) -> None:
     assert [(shift["name"], shift["scan_count"]) for shift in shifts][0] == ("afternoon", 0)
 
 
-def test_end_shift_leaves_the_current_view_empty_not_all_time(client) -> None:
+def test_shifts_are_automatic_and_report_the_clock(client) -> None:
     test_client, api = client
+    assert test_client.post("/api/sessions", json={"name": "x"}).status_code == 405
     session = test_client.get("/api/sessions/active").json()["session"]
-    api.storage.save_scan({"scan_id": "s1", "session_id": session["id"], "captured_at": "2026-10-27T08:00:00+00:00", "final_grade": "Class A", "processing_status": "completed"})
-    api.storage.record_temperature(session["id"], 50.0, 0)
-    assert test_client.post(f"/api/sessions/{session['id']}/close").status_code == 204
+    assert test_client.post(f"/api/sessions/{session['id']}/close").status_code == 405
+    body = test_client.get("/api/sessions").json()
+    assert [shift["id"] for shift in body["items"]] == [session["id"]]
+    assert body["clock"]["trusted"] is True and "synchronized" in body["clock"]
+    assert test_client.get("/api/system/status").json()["clock"]["trusted"] is True
+    assert test_client.patch("/api/sessions/missing", json={"name": "x"}).status_code == 404
 
-    assert test_client.get("/api/sessions/active").json()["session"] is None
-    current = test_client.get("/api/analytics/summary?session=active").json()
-    assert (current["total_scans"], current["cpu_temperature"]) == (0, None)
-    assert test_client.get("/api/inspection/scans?session=active").json()["items"] == []
-    assert test_client.get("/api/analytics/summary").json()["total_scans"] == 1
-    ended = test_client.get(f"/api/analytics/summary?session={session['id']}").json()
-    assert (ended["class_a_count"], ended["cpu_temperature"]["mean_c"]) == (1, 50.0)
+    # A record from later than the clock reads means the clock went back.
+    api.storage.save_scan({"scan_id": "future", "session_id": session["id"], "captured_at": "2099-01-01T00:00:00+00:00", "final_grade": "Class A", "processing_status": "completed"})
+    assert test_client.get("/api/sessions").json()["clock"]["trusted"] is False
 
 
-def test_temperature_is_sampled_only_while_a_shift_is_open(client, monkeypatch) -> None:
+def test_closed_shift_scans_are_read_only(client, tmp_path, monkeypatch) -> None:
+    test_client, api = client
+    monkeypatch.setenv("BANAGRADE_RETRAIN_DIR", str(tmp_path / "retrain"))
+    old = test_client.get("/api/sessions/active").json()["session"]
+    for scan_id in ("a", "v"):
+        api.storage.save_scan({"scan_id": scan_id, "session_id": old["id"], "captured_at": "2026-10-27T08:00:00+00:00", "final_grade": "Class A", "processing_status": "completed"})
+    assert test_client.post("/api/inspection/scans/a/dispute", json={"reason": "small", "corrected_grade": "Class B"}).status_code == 201
+    assert test_client.post("/api/inspection/scans/void", json={"scan_ids": ["v"], "reason": "Test run"}).status_code == 200
+    api.storage.close_session(old["id"])
+    today = test_client.get("/api/sessions/active").json()["session"]
+    api.storage.save_scan({"scan_id": "n", "session_id": today["id"], "captured_at": now_iso(), "final_grade": "Class A", "processing_status": "completed"})
+
+    message = "This scan belongs to a closed shift and can no longer be changed"
+    for method, path, body in (
+        ("post", "/api/inspection/scans/a/dispute", {"reason": "late", "corrected_grade": "Rejected"}),
+        ("delete", "/api/inspection/scans/a/disputes", None),
+        ("post", "/api/inspection/scans/void", {"scan_ids": ["n", "a"], "reason": "Test run"}),
+        ("post", "/api/inspection/scans/unvoid", {"scan_ids": ["v"]}),
+    ):
+        response = test_client.request(method.upper(), path, json=body)
+        assert (response.status_code, response.json()["detail"]) == (409, message), path
+    assert test_client.patch(f"/api/sessions/{old['id']}", json={"name": "x"}).status_code == 409
+    scans = {scan["scan_id"]: scan for scan in test_client.get("/api/inspection/scans").json()["items"]}
+    assert scans["n"]["voided_at"] is None and scans["a"]["final_grade"] == "Class B" and scans["v"]["voided_at"]
+    assert (scans["n"]["shift_closed"], scans["a"]["shift_closed"]) == (0, 1)
+    # Viewing and exporting a closed shift still work; today's scans stay editable.
+    assert "a" in test_client.get(f"/api/exports/scans.csv?session={old['id']}").text
+    assert test_client.post("/api/inspection/scans/void", json={"scan_ids": ["n"], "reason": "Test run"}).json()["voided"] == 1
+
+
+def test_a_dashboards_time_sets_the_clock_only_forward_and_without_internet_time(client, monkeypatch) -> None:
+    test_client, api = client
+    set_to: list[float] = []
+    monkeypatch.setattr(api, "set_clock", set_to.append)
+    offer = lambda ahead_s: test_client.post("/api/system/clock", json={"now_ms": (time.time() + ahead_s) * 1000})
+
+    monkeypatch.setattr(api, "time_synchronized", lambda: True)  # internet time wins
+    assert offer(3600).json()["set"] is False
+    monkeypatch.setattr(api, "time_synchronized", lambda: None)  # not a systemd host, e.g. a laptop
+    assert offer(3600).json()["set"] is False
+    monkeypatch.setattr(api, "time_synchronized", lambda: False)
+    assert offer(30).json()["set"] is False  # close enough
+    assert offer(-3600).json()["set"] is False  # never back
+    assert set_to == []
+
+    cutoff = datetime.now(UTC)
+    corrections = []
+    monkeypatch.setattr(api, "clock_watch", SimpleNamespace(check=lambda: (3600.0, cutoff)))
+    monkeypatch.setattr(api.storage, "correct_clock", lambda jump, at: corrections.append((jump, at)) or {"scans": 2, "shifts": 0, "samples": 1})
+    body = offer(3600).json()
+    assert (body["set"], body["moved"]) == (True, {"scans": 2, "shifts": 0, "samples": 1})
+    assert abs(set_to[0] - (time.time() + 3600)) < 5 and corrections == [(3600.0, cutoff)]
+    assert test_client.get("/api/system/status").json()["clock"]["set_by_dashboard_at"]
+
+    def refuse(_: float) -> None:
+        raise PermissionError
+
+    monkeypatch.setattr(api, "set_clock", refuse)
+    assert offer(3600).status_code == 403
+
+
+def test_temperature_is_sampled_into_todays_shift(client, monkeypatch) -> None:
     _, api = client
     from app import telemetry
 
     monkeypatch.setattr(telemetry, "cpu_temperature_c", lambda: 47.5)
     session = api.storage.active_session()
     assert telemetry.sample_temperature(api.storage) is True
-    api.storage.close_session(session["id"])
-    assert telemetry.sample_temperature(api.storage) is False
     monkeypatch.setattr(telemetry, "cpu_temperature_c", lambda: None)  # off the Pi
-    api.storage.create_session("Shift")
     assert telemetry.sample_temperature(api.storage) is False
     assert api.storage.temperature_summary()["samples"] == 1
     assert api.storage.temperature_summary(session["id"])["mean_c"] == 47.5

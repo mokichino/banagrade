@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { request } from '../composables/useApi.js'
-import { GRADE_FILTERS, isVoided, matchesGrade, matchesSearch } from '../lib/grades.js'
+import { GRADE_FILTERS, isReadOnly, isVoided, matchesGrade, matchesSearch } from '../lib/grades.js'
 import { downloadScansCsv } from '../lib/csv.js'
 import { plural, scopeDescription, scopeQuery, scopeTitle } from '../lib/shifts.js'
 import FileIcon from '../components/FileIcon.vue'
@@ -29,8 +29,10 @@ const filtered = computed(() => scans.value.filter(scan => matchesSearch(scan, s
 const pages = computed(() => Math.max(1, Math.ceil(filtered.value.length / PAGE_SIZE)))
 const pageRows = computed(() => filtered.value.slice((page.value - 1) * PAGE_SIZE, page.value * PAGE_SIZE))
 const truncated = computed(() => scans.value.length >= LIMIT)
-const listedVoided = computed(() => filtered.value.filter(isVoided))
-const listedCounting = computed(() => filtered.value.filter(scan => !isVoided(scan)))
+// Batch actions only take scans still open to change; a closed shift's scans are read-only.
+const listedVoided = computed(() => filtered.value.filter(scan => isVoided(scan) && !isReadOnly(scan)))
+const listedCounting = computed(() => filtered.value.filter(scan => !isVoided(scan) && !isReadOnly(scan)))
+const pastShift = computed(() => !['active', 'all'].includes(scope.value))
 // Voiding a batch (a test run, say) is offered once the list is narrowed to a shift or a filter, never for all history at once.
 const batchVoid = computed(() => listedCounting.value.length > 1 && (scope.value !== 'all' || filtering.value))
 
@@ -38,7 +40,8 @@ const countText = computed(() => {
   if (loading.value) return 'Loading…'
   const total = filtered.value.length
   const shown = total > PAGE_SIZE ? `Showing ${((page.value - 1) * PAGE_SIZE + 1).toLocaleString()}–${Math.min(page.value * PAGE_SIZE, total).toLocaleString()} · ` : ''
-  const voided = gradeFilter.value === 'All' && listedVoided.value.length ? ` · ${listedVoided.value.length.toLocaleString()} voided` : ''
+  const voidedCount = filtered.value.filter(isVoided).length
+  const voided = gradeFilter.value === 'All' && voidedCount ? ` · ${voidedCount.toLocaleString()} voided` : ''
   return shown + (filtering.value ? `${total.toLocaleString()} of ${plural(scans.value.length, 'scan')} match` : plural(total, 'scan')) + voided
 })
 const emptyText = computed(() => {
@@ -88,7 +91,8 @@ watch(pages, count => { page.value = Math.min(page.value, count) })
       <div>
         <p class="eyebrow">Audit trail</p>
         <h2>{{ scopeTitle(scope, shifts) }}</h2>
-        <p class="muted">Every scan with its time, model confidence and final grade. Select a Scan ID for details, or the flag to correct a grade.</p>
+        <p v-if="pastShift" class="muted">Shift closed: read-only. Its scans can be viewed and exported, but no longer disputed or voided.</p>
+        <p v-else class="muted">Every scan with its time, model confidence and final grade. Select a Scan ID for details, or the flag to correct a grade.</p>
       </div>
     </div>
     <div class="history-controls">

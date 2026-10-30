@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+import sqlite3
 import tempfile
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -10,24 +13,24 @@ from typing import Annotated, Any
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, PlainTextResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, StringConstraints
 from starlette.background import BackgroundTask
 
 from . import demo, power
 from .alignment import measure_sheet
+from .clock import MIN_JUMP_S, WATCH_S, ClockWatch, set_clock, time_synchronized
 from .drift import drift_report
 from .leds import GRADE_TO_LED, LedState
 from .model_inference import UltralyticsInference
 from .pipeline import PipelineState, PresencePipeline
 from .telemetry import read_telemetry, sample_temperature_forever
-from .storage import SHIFT_FROM_SCAN, Storage, disputes_zip, now_iso, scans_csv
+from .storage import SHIFT_FROM_SCAN, ShiftClosed, Storage, disputes_zip, now_iso, scans_csv
 
 
-class SessionRequest(BaseModel):
+class RenameRequest(BaseModel):
     name: str | None = Field(default=None, max_length=80)
-    notes: str | None = Field(default=None, max_length=500)
 
 
 class DisputeRequest(BaseModel):
@@ -45,6 +48,10 @@ class VoidRequest(BaseModel):
 
 class UnvoidRequest(BaseModel):
     scan_ids: ScanIds
+
+
+class ClockRequest(BaseModel):
+    now_ms: float = Field(gt=0)
 
 
 class PowerRequest(BaseModel):
@@ -72,6 +79,31 @@ model_inference = UltralyticsInference.from_environment()
 pipeline = PresencePipeline(storage, model_inference)
 events = EventHub()
 power_tasks: set[asyncio.Task[None]] = set()
+log = logging.getLogger(__name__)
+clock_watch = ClockWatch()
+clock_lock = asyncio.Lock()
+clock_state: dict[str, str | None] = {"set_by_dashboard_at": None}
+
+
+async def catch_clock_jump() -> dict[str, int] | None:
+    """After the clock jumps forward (internet time, or a dashboard's), move what this boot recorded by the same amount."""
+    async with clock_lock:
+        found = clock_watch.check()
+        if found is None:
+            return None
+        moved = await asyncio.to_thread(storage.correct_clock, *found)
+    log.warning("Clock jumped %.0f s forward; moved %s recorded since boot", found[0], moved)
+    await events.publish("clock_corrected", {"jump_s": round(found[0]), **moved})
+    return moved
+
+
+async def watch_clock_forever() -> None:
+    while True:
+        await asyncio.sleep(WATCH_S)
+        try:
+            await catch_clock_jump()
+        except sqlite3.Error:  # try again on the next round; grading goes on regardless
+            pass
 
 
 @asynccontextmanager
@@ -87,8 +119,10 @@ async def lifespan(_: FastAPI):
     if demo_mode() and not pipeline.enabled:
         pipeline.leds.set(LedState.READY)  # presentation without a camera: start on green, not an error
     sampler = asyncio.create_task(sample_temperature_forever(storage))
+    watcher = asyncio.create_task(watch_clock_forever())
     yield
     sampler.cancel()
+    watcher.cancel()
     await pipeline.stop()
 
 
@@ -101,14 +135,15 @@ app.add_middleware(
 )
 
 
-# Matches no shift, so the current-shift view is empty, not all-time, between End shift and the next scan.
-NO_OPEN_SHIFT = "none-open"
+@app.exception_handler(ShiftClosed)
+async def shift_closed(_, error: ShiftClosed) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(error)})
 
 
 def resolve_session(session: str | None) -> str | None:
-    """`session=active` scopes analytics to the open shift; omit for all-time totals."""
+    """`session=active` scopes analytics to today's shift; omit for all-time totals."""
     if session == "active":
-        return storage.active_session_id() or NO_OPEN_SHIFT
+        return storage.ensure_active_session()["id"]
     return session
 
 
@@ -129,7 +164,31 @@ async def system_status() -> dict[str, Any]:
         "websocket_clients": len(events.clients),
         "demo": {"mode": demo_mode(), "data_present": demo.has_demo_data(storage)},
         "power": await power.status(),
+        "clock": clock(),
     }
+
+
+def clock() -> dict[str, Any]:
+    """`trusted` is false when the clock is behind what is already recorded; `synchronized` is whether internet time set it."""
+    return {**storage.clock_status(), "synchronized": time_synchronized(), **clock_state}
+
+
+@app.post("/api/system/clock")
+async def offer_clock(payload: ClockRequest) -> dict[str, Any]:
+    """A dashboard sends its device's time on connecting; phones keep the right time from the cell network.
+
+    Taken only while the Pi has no internet time, and only to move the clock forward: without an RTC battery a power
+    cut leaves it behind, never ahead, and anyone on the Wi-Fi can call this.
+    """
+    ahead_s = payload.now_ms / 1000 - time.time()
+    if time_synchronized() is not False or ahead_s < MIN_JUMP_S:
+        return {"set": False, "ahead_s": round(ahead_s, 1)}
+    try:
+        set_clock(payload.now_ms / 1000)
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail="The service is not allowed to set the clock; give it AmbientCapabilities=CAP_SYS_TIME (deploy/banagrade.service)") from error
+    clock_state["set_by_dashboard_at"] = now_iso()
+    return {"set": True, "ahead_s": round(ahead_s, 1), "moved": await catch_clock_jump()}
 
 
 @app.post("/api/demo/simulate-scan", status_code=201)
@@ -313,6 +372,7 @@ def analytics_trend(
 
 @app.post("/api/inspection/scans/{scan_id}/dispute", status_code=201)
 async def dispute_scan(scan_id: str, payload: DisputeRequest) -> dict[str, Any]:
+    storage.ensure_active_session()  # a shift left open from yesterday ends first, so its scans are read-only
     scan = storage.get_scan(scan_id)
     if scan is None:
         raise HTTPException(status_code=404, detail="Scan not found")
@@ -333,6 +393,7 @@ async def dispute_scan(scan_id: str, payload: DisputeRequest) -> dict[str, Any]:
 # leaves a scan out of the totals but keeps it listed; clearing test data is scripts/clear_scans.py on the Pi.
 @app.post("/api/inspection/scans/void")
 async def void_scans(payload: VoidRequest) -> dict[str, Any]:
+    storage.ensure_active_session()
     voided = storage.void_scans(payload.scan_ids, payload.reason)
     if not voided and not any(storage.get_scan(scan_id) for scan_id in payload.scan_ids):
         raise HTTPException(status_code=404, detail="Scan not found")
@@ -342,6 +403,7 @@ async def void_scans(payload: VoidRequest) -> dict[str, Any]:
 
 @app.post("/api/inspection/scans/unvoid")
 async def unvoid_scans(payload: UnvoidRequest) -> dict[str, Any]:
+    storage.ensure_active_session()
     restored = storage.unvoid_scans(payload.scan_ids)
     if not restored and not any(storage.get_scan(scan_id) for scan_id in payload.scan_ids):
         raise HTTPException(status_code=404, detail="Scan not found")
@@ -356,6 +418,7 @@ def list_scan_disputes(scan_id: str) -> dict[str, Any]:
 
 @app.delete("/api/inspection/scans/{scan_id}/disputes")
 async def delete_disputes(scan_id: str) -> dict[str, Any]:
+    storage.ensure_active_session()
     try:
         result = storage.delete_disputes(scan_id)
     except KeyError as error:
@@ -364,30 +427,26 @@ async def delete_disputes(scan_id: str) -> dict[str, Any]:
     return result
 
 
+# Shifts start and end on their own, one per day (Storage.ensure_active_session); the dashboard can only name today's.
 @app.get("/api/sessions")
 def sessions() -> dict[str, Any]:
-    return {"items": storage.list_sessions()}
+    storage.ensure_active_session()
+    return {"items": storage.list_sessions(), "clock": clock()}
 
 
 @app.get("/api/sessions/active")
 def active_session() -> dict[str, Any]:
-    return {"session": storage.active_session()}
+    return {"session": storage.ensure_active_session()}
 
 
-@app.post("/api/sessions", status_code=201)
-async def create_session(payload: SessionRequest) -> dict[str, Any]:
-    current = storage.active_session()
-    if current:
-        storage.close_session(current["id"])
-    session = storage.create_session(payload.notes or "Shift started from dashboard", payload.name)
-    await events.publish("session_updated", {"session_id": session["id"], "session": session})
+@app.patch("/api/sessions/{session_id}")
+async def rename_session(session_id: str, payload: RenameRequest) -> dict[str, Any]:
+    try:
+        session = storage.rename_session(session_id, payload.name)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Shift not found") from error
+    await events.publish("session_updated", {"session_id": session_id, "session": session})
     return session
-
-
-@app.post("/api/sessions/{session_id}/close", status_code=204)
-async def close_session(session_id: str) -> None:
-    storage.close_session(session_id)
-    await events.publish("session_updated", {"session_id": session_id})
 
 
 @app.get("/api/config")

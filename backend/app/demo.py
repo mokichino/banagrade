@@ -102,13 +102,10 @@ def _hourly_reject_rate(rng: random.Random, hour_index: int) -> float:
 
 
 def seed(storage: Storage, *, days: int = 6, seed_value: int = 2026, now: datetime | None = None, current_shift_hours: float = 3.0) -> dict[str, int]:
-    """Create closed past shifts plus one open current shift full of mock scans."""
+    """Create closed past shifts plus today's open shift, full of mock scans."""
     rng = random.Random(seed_value)
     now = now or datetime.now(UTC)
     counts = {"sessions": 0, "scans": 0, "disputes": 0}
-    for existing in [storage.active_session()]:
-        if existing:
-            storage.close_session(existing["id"])
 
     def run_shift(start: datetime, end: datetime, session_id: str) -> list[str]:
         ids: list[str] = []
@@ -134,8 +131,10 @@ def seed(storage: Storage, *, days: int = 6, seed_value: int = 2026, now: dateti
             connection.commit()
             counts["scans"] += len(run_shift(start, end, session_id))
 
-    current = storage.create_session("Demo shift (current)")
-    counts["sessions"] += 1
+    # Today's shift, as the service would open it; one already open today is reused, as there is one shift per day.
+    opened = storage.active_session_id()
+    current = storage.ensure_active_session("Demo shift (current)", now=now)
+    counts["sessions"] += current["id"] != opened
     ids = run_shift(now - timedelta(hours=current_shift_hours), now - timedelta(minutes=1), current["id"])
     counts["scans"] += len(ids)
 

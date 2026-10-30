@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { formatPercent } from '../grades.js'
-import { pastShifts, plural, scopeDescription, scopeQuery, scopeTitle, shiftDuration, shiftOptionLabel, shiftRange, shiftTitle } from '../shifts.js'
+import { pastShifts, plural, scopeDescription, scopeQuery, scopeTitle, shiftDate, shiftDuration, shiftOptionLabel, shiftTitle } from '../shifts.js'
 import { bucketLabel, intervalName, isIsolated, tickLabels, tickStep, timeTicks, trendBounds, trendPoints } from '../trend.js'
 import { scansCsv } from '../csv.js'
 
@@ -11,14 +11,13 @@ const NOW = { id: 'c', status: 'open', notes: 'Shift opened after clearing scans
 const EMPTY = { id: 'e', status: 'closed', notes: 'Shift opened automatically at startup', name: null, started_at: '2026-10-26T18:32:11+00:00', ended_at: '2026-10-26T18:48:29+00:00', scan_count: 0 }
 
 describe('shift labels', () => {
-  it('names a shift by when it ran, never by how it was opened', () => {
-    expect(shiftRange(MORNING)).toBe('Oct 27, 02:48 – 13:30')
-    expect(shiftRange(NIGHT)).toBe('Oct 26, 18:00 – Oct 27, 02:30')
-    expect(shiftRange(NOW)).toBe('Oct 27, 13:46 – now')
-    expect(shiftTitle(MORNING)).toBe('Oct 27, 02:48 – 13:30')
+  it('names a shift by its day in Manila, never by how it was opened', () => {
+    expect(shiftDate(MORNING)).toBe('Tue, Oct 27, 2026')  // 02:48 on Oct 27 in Manila, though Oct 26 in UTC
+    expect(shiftDate(NIGHT)).toBe('Mon, Oct 26, 2026')
+    expect(shiftTitle(MORNING)).toBe('Tue, Oct 27, 2026')
     expect(shiftTitle(NIGHT)).toBe('Toril batch')
-    expect(shiftOptionLabel(MORNING)).toBe('Oct 27, 02:48 – 13:30 · 97 scans')
-    expect(shiftOptionLabel(NIGHT)).toBe('Toril batch · Oct 26, 18:00 – Oct 27, 02:30 · 1 scan')
+    expect(shiftOptionLabel(MORNING)).toBe('Tue, Oct 27, 2026 · 97 scans')
+    expect(shiftOptionLabel(NIGHT)).toBe('Toril batch · Mon, Oct 26, 2026 · 1 scan')
   })
 
   it('gives durations in hours and days', () => {
@@ -31,14 +30,14 @@ describe('shift labels', () => {
     expect(pastShifts([NOW, MORNING, EMPTY, NIGHT]).map(shift => shift.id)).toEqual(['m', 'n'])
     const voidedRun = { ...EMPTY, id: 'v', voided_count: 12 }
     expect(pastShifts([voidedRun]).map(shift => shift.id)).toEqual(['v'])  // still reachable, to count them again
-    expect(shiftOptionLabel(voidedRun)).toBe('Oct 27, 02:32 – 02:48 · 0 scans · 12 voided')
+    expect(shiftOptionLabel(voidedRun)).toBe('Tue, Oct 27, 2026 · 0 scans · 12 voided')
   })
 
   it('describes the scope for headings, exports and the API', () => {
     const shifts = [NOW, MORNING]
     expect(scopeTitle('active', shifts)).toBe('Current shift')
-    expect(scopeTitle('m', shifts)).toBe('Oct 27, 02:48 – 13:30')
-    expect(scopeDescription('active', shifts)).toBe('Current shift · Oct 27, 13:46 – now · 0 scans')
+    expect(scopeTitle('m', shifts)).toBe('Tue, Oct 27, 2026')
+    expect(scopeDescription('active', shifts)).toBe('Current shift · Tue, Oct 27, 2026 · 0 scans')
     expect(scopeDescription('all', shifts)).toBe('All shifts')
     expect(scopeQuery('all')).toBe('')
     expect(scopeQuery('active')).toBe('session=active')

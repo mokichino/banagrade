@@ -9,5 +9,8 @@ it('builds a one-page audit PDF from filtered scans', () => {
   const doc = buildScansPdf(scans, { filter: 'All' })
   expect(doc.getNumberOfPages()).toBe(1)
   expect(doc.output('arraybuffer').byteLength).toBeGreaterThan(1000)
+  const text = doc.output()
+  expect(text).toContain('Page 1 of 1')
+  expect(text).not.toContain('stage1_best.pt')
   expect(pdfFilename(new Date('2026-10-13T00:00:00Z'))).toBe('banagrade-scans-2026-10-13.pdf')
 })

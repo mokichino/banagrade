@@ -42,7 +42,7 @@ onBeforeUnmount(() => window.clearInterval(timer))
       </template>
     </CameraCard>
     <OperationalSummaryCard :telemetry="telemetry" />
-    <HardwareStatusCard :pipeline="status?.pipeline" :models="status?.models" :telemetry="telemetry" />
+    <HardwareStatusCard :pipeline="status?.pipeline" :models="status?.models" :telemetry="telemetry" :clock="status?.clock" />
     <ModelsCard :models="status?.models" />
     <DriftCard :drift="drift" />
     <PowerCard :power="status?.power" />

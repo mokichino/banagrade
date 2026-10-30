@@ -1,10 +1,10 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { wsUrl } from './useApi.js'
 
-const DATA_EVENTS = new Set(['scan_completed', 'scan_disputed', 'dispute_deleted', 'scans_voided', 'scans_unvoided', 'session_updated'])
+const DATA_EVENTS = new Set(['scan_completed', 'scan_disputed', 'dispute_deleted', 'scans_voided', 'scans_unvoided', 'session_updated', 'clock_corrected'])
 
-/** WebSocket link to /ws/live with reconnect. Tracks LED + FSM state and signals data refreshes. */
-export function useLive(onDataChanged) {
+/** WebSocket link to /ws/live with reconnect. Tracks LED + FSM state and signals data refreshes and each (re)connect. */
+export function useLive(onDataChanged, onConnected) {
   const connection = ref('Connecting')
   const led = ref('offline')
   const fsmState = ref(null)
@@ -16,7 +16,7 @@ export function useLive(onDataChanged) {
 
   function connect() {
     socket = new WebSocket(wsUrl('/ws/live'))
-    socket.onopen = () => { connection.value = 'Connected'; attempt = 0 }
+    socket.onopen = () => { connection.value = 'Connected'; attempt = 0; onConnected?.() }
     socket.onmessage = message => {
       let event
       try { event = JSON.parse(message.data) } catch { return }

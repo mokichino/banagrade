@@ -34,7 +34,14 @@ async function loadDemoFlag() {
   try { demo.value = (await request('/api/system/status')).demo || demo.value } catch { /* header label is optional */ }
 }
 
-const { connection, led } = useLive(() => { refreshKey.value += 1; if (!demo.value.data_present) loadDemoFlag() })
+// Without an RTC battery, a power cut with no internet brings the Pi back with an old time. Phones keep the right
+// time from the cell network, so each connection offers this device's; the Pi takes it only while it has no internet
+// time, and corrects what it recorded since boot (a clock_corrected event then refreshes the pages).
+function offerClock() {
+  request('/api/system/clock', { method: 'POST', body: JSON.stringify({ now_ms: Date.now() }) }).catch(() => { /* the Pi's own clock stays */ })
+}
+
+const { connection, led } = useLive(() => { refreshKey.value += 1; if (!demo.value.data_present) loadDemoFlag() }, offerClock)
 
 function syncFromHash() { activeView.value = viewFromHash() }
 onMounted(() => { window.addEventListener('hashchange', syncFromHash); loadDemoFlag() })
@@ -71,7 +78,7 @@ function onVoidSaved() {
     </main>
     <ScanDrawer :scan="selectedScan" @close="selectedScan = null" />
     <DisputeModal :scan="disputeScan" @close="disputeScan = null" @saved="onDisputeSaved" @changed="refreshKey += 1" @error="error = $event" />
-    <VoidDialog :request="voidRequest" @close="voidRequest = null" @saved="onVoidSaved" />
+    <VoidDialog :request="voidRequest" @close="voidRequest = null" @saved="onVoidSaved" @changed="refreshKey += 1" />
     <PowerDialog :open="powerOpen" @close="powerOpen = false" />
   </div>
 </template>

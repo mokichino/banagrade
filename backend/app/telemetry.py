@@ -57,11 +57,14 @@ def device_model() -> str | None:
 
 
 def sample_temperature(storage: Any) -> bool:
-    """Record one CPU temperature reading against the open shift. Nothing is recorded between shifts or off the Pi."""
-    session_id, temperature = storage.active_session_id(), cpu_temperature_c()
-    if session_id is None or temperature is None:
+    """Record one CPU temperature reading against today's shift. Nothing is recorded off the Pi.
+
+    Asking for today's shift also rolls it over, so a Pi left running starts the new day's shift within a minute of
+    midnight, without waiting for a scan."""
+    temperature = cpu_temperature_c()
+    if temperature is None:
         return False
-    storage.record_temperature(session_id, temperature, (fan_state() or {}).get("level"))
+    storage.record_temperature(storage.ensure_active_session()["id"], temperature, (fan_state() or {}).get("level"))
     return True
 
 

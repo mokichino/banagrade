@@ -2,11 +2,12 @@ import csv
 import io
 import sqlite3
 import zipfile
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from app.storage import SHIFT_FROM_SCAN, Storage, disputes_zip, now_iso
+from app.storage import SHIFT_FROM_SCAN, ShiftClosed, Storage, disputes_zip, now_iso
 
 
 def _scan(scan_id: str, session_id: str | None, grade: str | None, captured_at: str | None = None, **extra) -> dict:
@@ -55,6 +56,139 @@ def test_active_session_is_reused_and_scopes_analytics(tmp_path: Path) -> None:
     assert storage.analytics_summary()["total_completed_scans"] == 2
 
 
+def _utc(text: str) -> datetime:
+    return datetime.fromisoformat(text).replace(tzinfo=UTC)
+
+
+def test_shift_rolls_over_at_manila_midnight_while_running(tmp_path: Path) -> None:
+    storage = Storage(tmp_path / "banagrade.db")
+    storage.initialize()
+    first = storage.ensure_active_session(now=_utc("2026-10-30T00:00:00"))  # 08:00 on Oct 30 in Manila
+    storage.save_scan(_scan("a", first["id"], "Class A", "2026-10-30T09:30:00+00:00"))
+    assert storage.ensure_active_session(now=_utc("2026-10-30T15:59:00"))["id"] == first["id"]  # 23:59, same day
+
+    second = storage.ensure_active_session(SHIFT_FROM_SCAN, now=_utc("2026-10-30T16:01:00"))  # 00:01 on Oct 31
+    assert second["id"] != first["id"]
+    assert (second["notes"], second["started_at"]) == (SHIFT_FROM_SCAN, "2026-10-30T16:01:00+00:00")
+    # The finished day ends at its last scan, not when the next one began.
+    shifts = {row["id"]: row for row in storage.list_sessions()}
+    assert (shifts[first["id"]]["status"], shifts[first["id"]]["ended_at"]) == ("closed", "2026-10-30T09:30:00+00:00")
+    assert storage.ensure_active_session(now=_utc("2026-10-31T02:00:00"))["id"] == second["id"]
+
+
+def test_restarts_on_the_same_day_reuse_its_shift(tmp_path: Path) -> None:
+    storage = Storage(tmp_path / "banagrade.db")
+    storage.initialize()
+    morning = storage.ensure_active_session(now=_utc("2026-10-30T00:00:00"))
+    restarted = Storage(storage.path)  # what a reboot amounts to: a fresh Storage on the same file
+    restarted.initialize()
+    assert restarted.ensure_active_session(now=_utc("2026-10-30T07:00:00"))["id"] == morning["id"]
+    assert len(restarted.list_sessions()) == 1
+
+
+def test_an_empty_shift_from_an_earlier_day_is_deleted(tmp_path: Path) -> None:
+    storage = Storage(tmp_path / "banagrade.db")
+    storage.initialize()
+    idle = storage.ensure_active_session(now=_utc("2026-10-29T00:00:00"))
+    with storage.connect() as connection:  # record_temperature stamps the real time, ahead of this test's clock
+        connection.execute("INSERT INTO telemetry_samples (sampled_at, session_id, cpu_temperature_c) VALUES ('2026-10-29T01:00:00+00:00', ?, 48.0)", (idle["id"],))
+    today = storage.ensure_active_session(now=_utc("2026-10-30T00:00:00"))
+    assert [row["id"] for row in storage.list_sessions()] == [today["id"]]
+    assert storage.temperature_summary() is None
+
+
+def test_a_clock_gone_back_does_not_roll_over_or_backdate(tmp_path: Path) -> None:
+    storage = Storage(tmp_path / "banagrade.db")
+    storage.initialize()
+    shift = storage.ensure_active_session(now=_utc("2026-10-30T00:00:00"))
+    storage.save_scan(_scan("a", shift["id"], "Class A", "2026-10-30T09:00:00+00:00"))
+    # A Pi with no internet and no RTC battery boots with an old date: same shift, and the dashboard is told.
+    back = _utc("2026-10-28T03:00:00")
+    assert storage.ensure_active_session(now=back)["id"] == shift["id"]
+    assert storage.clock_status(back)["trusted"] is False
+    assert storage.clock_status(_utc("2026-10-30T09:02:00"))["trusted"] is True  # a small NTP step back is fine
+    assert storage.clock_status(_utc("2026-10-30T09:20:00")) == {"trusted": True, "now": "2026-10-30T09:20:00+00:00", "newest_record": "2026-10-30T09:00:00+00:00"}
+
+    # With no shift open, a new one starts at the newest record rather than at the wrong, earlier date.
+    storage.close_session(shift["id"])
+    opened = storage.ensure_active_session(now=back)
+    assert opened["started_at"] == "2026-10-30T09:00:00+00:00"
+
+
+def test_a_corrected_clock_moves_what_this_boot_recorded_into_today(tmp_path: Path) -> None:
+    path = tmp_path / "banagrade.db"
+    before = Storage(path, boot_id="before-the-power-cut")
+    before.initialize()
+    shift = before.ensure_active_session(now=_utc("2026-10-30T00:00:00"))  # Oct 30, 08:00 in Manila
+    before.save_scan(_scan("a", shift["id"], "Class A", "2026-10-30T09:00:00+00:00"))  # 17:00, then the power goes
+
+    # Power back at 08:00 on Oct 31 with no internet: the clock resumes near 17:00 on Oct 30, so scans land on Oct 30.
+    after = Storage(path, boot_id="after-the-power-cut")
+    assert after.ensure_active_session(now=_utc("2026-10-30T09:05:00"))["id"] == shift["id"]
+    after.save_scan(_scan("b", shift["id"], "Class B", "2026-10-30T09:10:00+00:00", completed_at="2026-10-30T09:10:02+00:00"))
+    with after.connect() as connection:
+        connection.execute("INSERT INTO telemetry_samples (sampled_at, session_id, cpu_temperature_c, boot_id) VALUES ('2026-10-30T09:15:00+00:00', ?, 50.0, 'after-the-power-cut')", (shift["id"],))
+
+    # A phone sets the clock 16 hours forward, to 09:30 on Oct 31.
+    moved = after.correct_clock(16 * 3600, _utc("2026-10-30T09:30:00"), now=_utc("2026-10-31T01:30:00"))
+    assert moved == {"scans": 1, "shifts": 0, "samples": 1}
+    b = after.get_scan("b")
+    assert (b["captured_at"], b["completed_at"]) == ("2026-10-31T01:10:00+00:00", "2026-10-31T01:10:02+00:00")
+    today = after.active_session()
+    assert today["id"] != shift["id"] and b["session_id"] == today["id"]
+    assert after.temperature_summary(today["id"])["samples"] == 1
+    # Oct 30 keeps only what happened before the power cut, untouched, and ends at its own last scan.
+    assert after.get_scan("a")["captured_at"] == "2026-10-30T09:00:00+00:00"
+    old = next(row for row in after.list_sessions() if row["id"] == shift["id"])
+    assert (old["status"], old["ended_at"], old["scan_count"]) == ("closed", "2026-10-30T09:00:00+00:00", 1)
+    # Correcting again finds nothing behind the cutoff.
+    assert after.correct_clock(16 * 3600, _utc("2026-10-30T09:30:00"), now=_utc("2026-10-31T01:31:00"))["scans"] == 0
+
+
+def test_a_shift_opened_while_the_clock_was_wrong_moves_with_it(tmp_path: Path) -> None:
+    storage = Storage(tmp_path / "banagrade.db", boot_id="this-boot")
+    storage.initialize()
+    wrong = storage.ensure_active_session(now=_utc("2026-10-29T01:00:00"))
+    storage.save_scan(_scan("a", wrong["id"], "Class A", "2026-10-29T02:00:00+00:00"))
+    storage.correct_clock(2 * 86400, _utc("2026-10-29T03:00:00"), now=_utc("2026-10-31T03:00:00"))
+    [shift] = storage.list_sessions()
+    assert (shift["id"], shift["started_at"], shift["status"]) == (wrong["id"], "2026-10-31T01:00:00+00:00", "open")
+    assert storage.get_scan("a")["captured_at"] == "2026-10-31T02:00:00+00:00"
+
+
+def test_closed_shift_scans_are_read_only(tmp_path: Path) -> None:
+    storage = Storage(tmp_path / "banagrade.db")
+    storage.initialize()
+    yesterday = storage.ensure_active_session(now=_utc("2026-10-29T00:00:00"))
+    storage.save_scan(_scan("old", yesterday["id"], "Class A", "2026-10-29T03:00:00+00:00"))
+    storage.save_scan(_scan("old-voided", yesterday["id"], "Class B", "2026-10-29T04:00:00+00:00"))
+    storage.void_scans(["old-voided"], "Duplicate scan of the same bunch")
+    storage.dispute_scan("old", "Looks small", "Class B", tmp_path / "retrain")
+    today = storage.ensure_active_session(now=_utc("2026-10-30T00:00:00"))
+    storage.save_scan(_scan("new", today["id"], "Class A", "2026-10-30T01:00:00+00:00"))
+
+    for change in (
+        lambda: storage.dispute_scan("old", "Too late", "Rejected", tmp_path / "retrain"),
+        lambda: storage.delete_disputes("old"),
+        lambda: storage.void_scans(["new", "old"], "Test run"),
+        lambda: storage.unvoid_scans(["old-voided"]),
+        lambda: storage.rename_session(yesterday["id"], "Kapalong batch"),
+    ):
+        with pytest.raises(ShiftClosed):
+            change()
+    # A mixed batch changes nothing, today's scan included.
+    assert storage.get_scan("new")["voided_at"] is None
+    assert (storage.get_scan("old")["final_grade"], len(storage.scan_disputes("old"))) == ("Class B", 1)
+    assert storage.get_scan("old-voided")["voided_at"] is not None
+    assert {scan["scan_id"]: scan["shift_closed"] for scan in storage.list_scans()} == {"new": 0, "old": 1, "old-voided": 1}
+
+    # Today's shift stays editable.
+    assert storage.void_scans(["new"], "Test run") == ["new"]
+    assert storage.rename_session(today["id"], "  Toril batch ")["name"] == "Toril batch"
+    with pytest.raises(KeyError):
+        storage.rename_session("missing", "x")
+
+
 def test_rejection_trend_buckets(tmp_path: Path) -> None:
     storage = Storage(tmp_path / "banagrade.db")
     storage.initialize()
@@ -98,13 +232,20 @@ def test_migration_adds_shift_names_without_renaming_old_shifts(tmp_path: Path) 
     from app.storage import SCHEMA
 
     with storage.connect() as connection:
-        old = SCHEMA.replace("    notes TEXT,\n    name TEXT\n", "    notes TEXT\n").replace("    error_details TEXT,\n    voided_at TEXT,\n    void_reason TEXT\n", "    error_details TEXT\n")
-        assert "voided_at" not in old and "name TEXT" not in old
+        old = (
+            SCHEMA.replace("    notes TEXT,\n    name TEXT,\n    boot_id TEXT\n", "    notes TEXT\n")
+            .replace("    error_details TEXT,\n    voided_at TEXT,\n    void_reason TEXT,\n    boot_id TEXT\n", "    error_details TEXT\n")
+            .replace("    fan_level INTEGER,\n    boot_id TEXT\n", "    fan_level INTEGER\n")
+        )
+        assert "voided_at" not in old and "name TEXT" not in old and "boot_id" not in old
         connection.executescript(old)
         connection.execute("INSERT INTO sessions (id, started_at, status, notes) VALUES ('old', '2026-10-20T04:58:24+00:00', 'open', 'Shift opened automatically at startup')")
     storage.initialize()
     [old] = storage.list_sessions()
     assert (old["notes"], old["name"], old["voided_count"]) == ("Shift opened automatically at startup", None, 0)
+    with storage.connect() as connection:
+        for table in ("scans", "sessions", "telemetry_samples"):
+            assert "boot_id" in {row["name"] for row in connection.execute(f"PRAGMA table_info({table})")}
 
 
 def test_dispute_keeps_model_grade_across_repeated_corrections(tmp_path: Path) -> None:
@@ -191,7 +332,7 @@ def test_clear_scans_backs_up_then_deletes_records_and_frames(tmp_path: Path) ->
 
     result = storage.clear_scans(tmp_path / "backups", frames)
 
-    assert (result["scans"], result["disputes"], result["frames"], result["shifts"]) == (2, 1, 1, 2)
+    assert (result["scans"], result["disputes"], result["frames"], result["shifts"]) == (2, 1, 1, 1)
     assert storage.list_scans() == [] and storage.scan_disputes("a") == []
     # The photo moves into the backup folder instead of being deleted, so a clear can be undone completely.
     folder = Path(result["backup"])
@@ -201,10 +342,9 @@ def test_clear_scans_backs_up_then_deletes_records_and_frames(tmp_path: Path) ->
     assert Path(dispute["archived_frames"][0]).exists()
     with sqlite3.connect(folder / "banagrade.db") as backup:
         assert backup.execute("SELECT COUNT(*) FROM scans").fetchone()[0] == 2
-    active = storage.active_session()
-    assert active["id"] == result["session_id"] != session["id"]
-    # The emptied shifts are in the backup only; the new shift is the one left.
-    assert [row["id"] for row in storage.list_sessions()] == [active["id"]]
+    # Today's shift carries on, emptied, so the day keeps its one shift; the empty past shift is in the backup only.
+    assert storage.active_session()["id"] == result["session_id"] == session["id"]
+    assert [row["id"] for row in storage.list_sessions()] == [session["id"]]
     with sqlite3.connect(folder / "banagrade.db") as backup:
         assert backup.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 2
         assert backup.execute("SELECT COUNT(*) FROM telemetry_samples").fetchone()[0] == 1

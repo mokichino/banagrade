@@ -52,9 +52,9 @@ def main(argv: list[str] | None = None) -> int:
     except (sqlite3.Error, RuntimeError) as error:
         print(f"Nothing deleted: {error}", file=sys.stderr)
         return 1
-    print(f"Cleared {plural(result['scans'], 'scan')}, {plural(result['disputes'], 'dispute')} and {plural(result['shifts'], 'shift')}; "
+    print(f"Cleared {plural(result['scans'], 'scan')}, {plural(result['disputes'], 'dispute')} and {plural(result['shifts'], 'past shift')}; "
           f"moved {plural(result['frames'], 'photo')} into the backup.")
-    print(f"Backup: {result['backup']}. A new shift has started; reload any open dashboard.")
+    print(f"Backup: {result['backup']}. Today's shift carries on, now empty; reload any open dashboard.")
     return 0
 
 

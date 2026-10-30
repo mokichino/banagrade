@@ -1,5 +1,5 @@
 <script setup>
-import { confidencePercent, disputeSummary, failureReason, finalGradeKey, finalGradeLabel, formatConfidence, formatTimestamp, isHealthy, isVoided, scanLabel, stage1Label, stage2Label } from '../lib/grades.js'
+import { confidencePercent, disputeSummary, failureReason, finalGradeKey, finalGradeLabel, formatConfidence, formatTimestamp, isHealthy, isReadOnly, isVoided, scanLabel, stage1Label, stage2Label } from '../lib/grades.js'
 
 defineProps({ scans: { type: Array, required: true }, emptyText: { type: String, default: 'No scan records match.' } })
 defineEmits(['select', 'dispute', 'void'])
@@ -39,7 +39,8 @@ defineEmits(['select', 'dispute', 'void'])
             <small v-else-if="finalGradeKey(scan) === 't' && failureReason(scan)" class="failure-reason">{{ failureReason(scan) }}</small>
           </td>
           <td>
-            <div class="row-actions">
+            <span v-if="isReadOnly(scan)" class="read-only-note" title="This scan's shift has ended, so its grade and void status are final">Shift closed: read-only</span>
+            <div v-else class="row-actions">
               <button class="icon-button dispute-button" :disabled="isVoided(scan)" :title="isVoided(scan) ? 'Count this scan again before disputing it' : scan.disputed ? 'Disputes for this scan' : 'Dispute grade'" :aria-label="`Dispute ${scanLabel(scan.scan_id)}`" @click="$emit('dispute', scan)">
                 <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" /><path d="M4 22v-7" /></svg>
               </button>

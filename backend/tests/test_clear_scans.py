@@ -33,7 +33,7 @@ def test_clear_backs_up_and_keeps_the_photos(tmp_path, monkeypatch, capsys) -> N
     monkeypatch.setattr("builtins.input", lambda prompt: "CLEAR")
     assert clear_scans.main(args) == 0
     out = capsys.readouterr().out
-    assert "1 scan in 1 shift." in out and "Cleared 1 scan, 0 disputes and 1 shift; moved 1 photo into the backup." in out
+    assert "1 scan in 1 shift." in out and "Cleared 1 scan, 0 disputes and 0 past shifts; moved 1 photo into the backup." in out
     assert storage.list_scans() == []
     [folder] = (tmp_path / "backups").iterdir()
     assert (folder / "banagrade.db").is_file() and (folder / "frames" / "a.jpg").is_file()

@@ -13,6 +13,7 @@ import CameraCard from '../status/CameraCard.vue'
 import PowerCard from '../status/PowerCard.vue'
 import PowerDialog from '../PowerDialog.vue'
 import AppSidebar from '../layout/AppSidebar.vue'
+import App from '../../App.vue'
 import DashboardView from '../../views/DashboardView.vue'
 import HistoryView from '../../views/HistoryView.vue'
 import SystemStatusView from '../../views/SystemStatusView.vue'
@@ -156,6 +157,31 @@ describe('voiding instead of deleting', () => {
     wrapper.unmount()
   })
 
+  it('ScanTable and VoidDialog leave a closed shift\'s scans alone', async () => {
+    const locked = { ...counting, scan_id: 'l1', shift_closed: 1 }
+    const row = mount(ScanTable, { props: { scans: [locked] } }).find('tbody tr')
+    expect(row.find('.read-only-note').text()).toBe('Shift closed: read-only')
+    expect(row.find('.dispute-button').exists()).toBe(false)
+    expect(row.find('.void-button').exists()).toBe(false)
+
+    const wrapper = mount(VoidDialog, { props: { request: null } })
+    await wrapper.setProps({ request: { scans: [locked, counting], restore: false } })
+    expect(wrapper.find('h2').text()).toBe('Void #SCN-C1')
+  })
+
+  it('VoidDialog refreshes a stale list when the shift ended meanwhile', async () => {
+    const detail = 'This scan belongs to a closed shift and can no longer be changed'
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 409, json: async () => ({ detail }) })))
+    const wrapper = mount(VoidDialog, { props: { request: null } })
+    await wrapper.setProps({ request: { scans: [counting], restore: false } })
+    await wrapper.find('textarea').setValue('Test run')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.find('[role="alert"]').text()).toBe(`Unable to void: ${detail}`)
+    expect(wrapper.emitted('changed')).toHaveLength(1)
+    expect(wrapper.emitted('saved')).toBeUndefined()
+  })
+
   it('VoidDialog counts a batch again and leaves out scans that already count', async () => {
     const fetch = mockFetch({ '/api/inspection/scans/unvoid': { restored: 2, skipped: 0 } })
     const wrapper = mount(VoidDialog, { props: { request: null } })
@@ -186,10 +212,37 @@ describe('status cards with no data', () => {
     expect(text).not.toContain('Connected')
   })
 
-  it('HardwareStatusCard lists exactly four components, all unavailable', () => {
+  it('HardwareStatusCard lists the four components and the clock, all unavailable', () => {
     const rows = mount(HardwareStatusCard, { props: {} }).findAll('.diagnostic-row')
-    expect(rows).toHaveLength(4)
-    expect(rows.map(row => row.find('.status-badge').text())).toEqual(['Unreachable', 'Unavailable', 'Unavailable', 'Unavailable'])
+    expect(rows).toHaveLength(5)
+    expect(rows.map(row => row.find('.status-badge').text())).toEqual(['Unreachable', 'Unavailable', 'Unavailable', 'Unavailable', 'Unavailable'])
+  })
+
+  it('HardwareStatusCard says whether the clock can be trusted', () => {
+    const clockRow = clock => mount(HardwareStatusCard, { props: { clock } }).findAll('.diagnostic-row').at(-1)
+    expect(clockRow({ trusted: true, synchronized: true }).text()).toContain('Set from internet time')
+    const offline = clockRow({ trusted: true, synchronized: false })
+    expect([offline.find('.status-badge').text(), offline.find('.status-badge').classes()]).toEqual(['Not synced', ['status-badge', 'neutral']])
+    const wrong = clockRow({ trusted: false, synchronized: false })
+    expect(wrong.find('.status-badge').text()).toBe('Wrong date')
+    expect(wrong.text()).toContain('check the RTC battery')
+    const phone = clockRow({ trusted: true, synchronized: false, set_by_dashboard_at: '2026-10-31T00:30:00+00:00' })
+    expect(phone.find('.status-badge').text()).toBe('Phone time')
+    expect(phone.text()).toContain("set from a dashboard's time")
+  })
+
+  it('the dashboard offers its device time each time the live link connects', async () => {
+    const sockets = []
+    vi.stubGlobal('WebSocket', class { constructor() { sockets.push(this) } close() {} })
+    const fetch = mockFetch({ '/api/system/clock': { set: false }, '/api/system/status': { demo: {} } })
+    const wrapper = mount(App, { global: { stubs: { DashboardView: true } } })
+    const before = Date.now()
+    sockets[0].onopen()
+    await flushPromises()
+    const [, options] = fetch.mock.calls.find(([url]) => url === '/api/system/clock')
+    expect(options.method).toBe('POST')
+    expect(JSON.parse(options.body).now_ms).toBeGreaterThanOrEqual(before)
+    wrapper.unmount()
   })
 
   it('DriftCard handles missing, insufficient and drifting reports', () => {
@@ -339,9 +392,9 @@ describe('views', () => {
   ]
   const SUMMARY = { total_scans: 97, total_completed_scans: 93, class_a_count: 24, class_b_count: 45, rejected_count: 24, technical_failure_count: 4, export_acceptance_rate: 74.19 }
 
-  it('ShiftSelect lists past shifts by time, hides empty ones and recovers from a cleared one', async () => {
+  it('ShiftSelect lists past shifts by date, hides empty ones and recovers from a cleared one', async () => {
     const wrapper = mount(ShiftSelect, { props: { modelValue: 'gone', shifts: SHIFTS } })
-    expect(wrapper.findAll('option').map(option => option.text())).toEqual(['Current shift', 'All shifts', 'Oct 27, 02:48 – 13:30 · 97 scans'])
+    expect(wrapper.findAll('option').map(option => option.text())).toEqual(['Current shift', 'All shifts', 'Tue, Oct 27, 2026 · 97 scans'])
     expect(wrapper.text()).not.toContain('opened automatically')
     expect(wrapper.emitted('update:modelValue')[0]).toEqual(['active'])
   })
@@ -370,38 +423,46 @@ describe('views', () => {
     expect(wrapper.findAll('.chart-table tbody tr')).toHaveLength(2)
   })
 
-  it('Dashboard marks a past shift and starts a named shift from a dialog', async () => {
+  it('Dashboard marks a past shift and names today\'s shift, but never starts or ends one', async () => {
     const fetch = mockFetch({
       '/api/analytics/summary': SUMMARY,
       '/api/analytics/trend': { items: [] },
-      '/api/sessions': { items: SHIFTS },
-      '/api/inspection/scans': { items: [] }
+      '/api/sessions': { items: SHIFTS, clock: { trusted: true, synchronized: false } },
+      '/api/inspection/scans': { items: [] },
+      '/api/sessions/now': { ...SHIFTS[0], name: 'Toril batch 2' }
     })
     const wrapper = mount(DashboardView, { attachTo: document.body })
     await flushPromises()
     expect(fetch).toHaveBeenCalledWith(expect.stringMatching(/^\/api\/analytics\/trend\?session=active&bucket_minutes=15&utc_offset_minutes=480$/), expect.anything())
     expect(wrapper.find('.shift-meta').text()).toBe('Toril batch · Started Oct 27, 13:30')
     expect(wrapper.find('.scope-notice').exists()).toBe(false)
+    expect(wrapper.find('.alert').exists()).toBe(false)  // offline but trusted: no warning on the dashboard
+    const labels = wrapper.findAll('button').map(button => button.text())
+    expect(labels).not.toContain('Start new shift')
+    expect(labels).not.toContain('End shift')
 
     await wrapper.find('select[aria-label="Shift"]').setValue('old')
     await flushPromises()
     expect(fetch).toHaveBeenCalledWith('/api/analytics/summary?session=old', expect.anything())
     expect(fetch).toHaveBeenCalledWith('/api/inspection/scans?session=old&limit=8', expect.anything())
     expect(wrapper.find('.shift-meta').text()).toBe('Ran for 10 h 42 min')
-    expect(wrapper.find('.scope-notice').text()).toContain('Past shift.')
+    expect(wrapper.find('.scope-notice').text()).toContain('its scans are read-only')
     expect(wrapper.find('.volume-card').text()).toContain('scanned in this shift')
+    expect(wrapper.find('.shift-actions').exists()).toBe(false)  // a past shift's name is final
 
-    await wrapper.findAll('button').find(button => button.text() === 'Start new shift').trigger('click')
+    await wrapper.find('select[aria-label="Shift"]').setValue('active')
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === 'Rename shift').trigger('click')
     const dialog = wrapper.find('[aria-labelledby="shift-title"]')
-    expect(dialog.text()).toContain('The current shift (started Oct 27, 13:30, 3 scans) ends now')
+    expect(dialog.text()).toContain('A new shift starts on its own each day')
+    expect(dialog.text()).toContain('Tue, Oct 27, 2026')
     expect(document.activeElement).toBe(dialog.find('input').element)
+    expect(dialog.find('input').element.value).toBe('Toril batch')
     await dialog.find('input').setValue('  Toril batch 2  ')
     await dialog.trigger('submit')
     await flushPromises()
-    expect(fetch).toHaveBeenCalledWith('/api/sessions', expect.objectContaining({ method: 'POST', body: JSON.stringify({ name: 'Toril batch 2' }) }))
+    expect(fetch).toHaveBeenCalledWith('/api/sessions/now', expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ name: 'Toril batch 2' }) }))
     expect(wrapper.find('[aria-labelledby="shift-title"]').exists()).toBe(false)
-    expect(wrapper.find('select[aria-label="Shift"]').element.value).toBe('active')
-    expect(wrapper.find('.scope-notice').exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -414,34 +475,22 @@ describe('views', () => {
     expect(wrapper.find('.scope-notice').exists()).toBe(false)
   })
 
-  it('Dashboard ends the shift only after confirming, then shows its final totals', async () => {
+  it('Dashboard shows the shift\'s CPU temperature and offers to name an unnamed shift', async () => {
     const cpu = { mean_c: 50.24, max_c: 53, samples: 41 }
-    const fetch = mockFetch({ '/api/analytics/summary': { ...SUMMARY, cpu_temperature: cpu }, '/api/analytics/trend': { items: [] }, '/api/sessions': { items: SHIFTS }, '/api/inspection/scans': { items: [] }, '/api/sessions/now/close': null })
+    const unnamed = [{ ...SHIFTS[0], name: null }, ...SHIFTS.slice(1)]
+    mockFetch({ '/api/analytics/summary': { ...SUMMARY, cpu_temperature: cpu }, '/api/analytics/trend': { items: [] }, '/api/sessions': { items: unnamed }, '/api/inspection/scans': { items: [] } })
     const wrapper = mount(DashboardView)
     await flushPromises()
-    expect(wrapper.find('.shift-meta').text()).toBe('Toril batch · Started Oct 27, 13:30 · CPU 50.2 °C average, 53.0 °C peak')
-
-    await wrapper.findAll('button').find(button => button.text() === 'End shift').trigger('click')
-    const dialog = wrapper.find('[aria-labelledby="end-shift-title"]')
-    expect(dialog.text()).toContain('The shift that started Oct 27, 13:30 ends now')
-    expect(dialog.text()).toContain('3 scans')
-    expect(fetch).not.toHaveBeenCalledWith('/api/sessions/now/close', expect.anything())
-    await dialog.trigger('submit')
-    await flushPromises()
-    expect(fetch).toHaveBeenCalledWith('/api/sessions/now/close', expect.objectContaining({ method: 'POST' }))
-    expect(fetch).toHaveBeenCalledWith('/api/analytics/summary?session=now', expect.anything())
-    expect(wrapper.find('[aria-labelledby="end-shift-title"]').exists()).toBe(false)
+    expect(wrapper.find('.shift-meta').text()).toBe('Started Oct 27, 13:30 · CPU 50.2 °C average, 53.0 °C peak')
+    expect(wrapper.find('.shift-actions button').text()).toBe('Name shift')
   })
 
-  it('Dashboard says when no shift is open and offers only Start new shift', async () => {
-    const closed = SHIFTS.map(shift => ({ ...shift, status: 'closed', ended_at: shift.ended_at || '2026-10-27T09:00:00Z' }))
-    mockFetch({ '/api/analytics/summary': { total_scans: 0, cpu_temperature: null }, '/api/analytics/trend': { items: [] }, '/api/sessions': { items: closed }, '/api/inspection/scans': { items: [] } })
+  it('Dashboard warns when the Pi\'s clock reads earlier than what is recorded', async () => {
+    mockFetch({ '/api/analytics/summary': SUMMARY, '/api/analytics/trend': { items: [] }, '/api/sessions': { items: SHIFTS, clock: { trusted: false, synchronized: false } }, '/api/inspection/scans': { items: [] } })
     const wrapper = mount(DashboardView)
     await flushPromises()
-    expect(wrapper.find('.shift-meta').text()).toBe('No shift open. The next bunch scanned starts one.')
-    expect(wrapper.findAll('button').some(button => button.text() === 'End shift')).toBe(false)
-    await wrapper.findAll('button').find(button => button.text() === 'Start new shift').trigger('click')
-    expect(wrapper.find('[aria-labelledby="shift-title"]').text()).toContain('No shift is open.')
+    expect(wrapper.find('.alert').text()).toContain("The Pi's clock looks wrong.")
+    expect(wrapper.find('.alert').text()).toContain('check its RTC battery')
   })
 
   const scan = (id, grade, extra = {}) => ({ scan_id: id, final_grade: grade, processing_status: grade ? 'completed' : 'failed', captured_at: '2026-10-26T19:00:00Z', ...extra })
@@ -472,7 +521,8 @@ describe('views', () => {
     await wrapper.find('select[aria-label="Shift"]').setValue('old')
     await flushPromises()
     expect(fetch).toHaveBeenCalledWith('/api/inspection/scans?limit=5000&session=old', expect.anything())
-    expect(wrapper.find('h2').text()).toBe('Oct 27, 02:48 – 13:30')
+    expect(wrapper.find('h2').text()).toBe('Tue, Oct 27, 2026')
+    expect(wrapper.find('.panel-heading .muted').text()).toContain('Shift closed: read-only')
     click.mockRestore()
   })
 
@@ -521,6 +571,15 @@ describe('views', () => {
     expect(shift.findAll('tbody tr')).toHaveLength(1)
     await shift.find('select[aria-label="Filter by grade"]').setValue('Voided')
     expect(shift.find('.result-count').text()).toBe('1 of 3 scans match')
+
+    // A closed shift's scans are read-only: no batch void or count-again for them.
+    const closed = items.map(item => ({ ...item, shift_closed: 1 }))
+    mockFetch({ '/api/inspection/scans': { items: closed }, '/api/sessions': { items: SHIFTS } })
+    const locked = mount(HistoryView, { props: { scope: 'old' } })
+    await flushPromises()
+    expect(locked.find('.result-count').text()).toBe('3 scans · 1 voided')
+    expect(locked.find('.batch-action').exists()).toBe(false)
+    expect(locked.findAll('.read-only-note')).toHaveLength(3)
   })
 
   it('System Status no longer offers to delete scans', async () => {

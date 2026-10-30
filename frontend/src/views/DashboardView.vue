@@ -7,9 +7,8 @@ import { formatPercent } from '../lib/grades.js'
 import { currentShift, plural, scopeQuery, scopeShift, shiftDuration, shiftStart } from '../lib/shifts.js'
 import { bucketLabel, intervalName, isIsolated, tickLabels, tickStep, timeTicks, trendBounds, trendPoints } from '../lib/trend.js'
 import ScanTable from '../components/ScanTable.vue'
-import EndShiftDialog from '../components/EndShiftDialog.vue'
+import RenameShiftDialog from '../components/RenameShiftDialog.vue'
 import ShiftSelect from '../components/ShiftSelect.vue'
-import StartShiftDialog from '../components/StartShiftDialog.vue'
 
 ChartJS.register(ArcElement, DoughnutController, Filler, LineElement, LinearScale, PointElement, Tooltip)
 
@@ -23,10 +22,11 @@ const bucketMinutes = ref(15)
 const summary = ref({})
 const trend = ref([])
 const shifts = ref([])
+// From /api/sessions: `trusted` is false when the Pi's clock reads earlier than scans already recorded.
+const clock = ref(null)
 const recent = ref([])
 const loading = ref(true)
-const starting = ref(false)
-const ending = ref(false)
+const renaming = ref(false)
 
 const withScope = (path, extra = '') => {
   const query = [scopeQuery(scope.value), extra].filter(Boolean).join('&')
@@ -42,7 +42,7 @@ const cpuNote = computed(() => {
 })
 const scopeNote = computed(() => {
   if (scope.value === 'all') return ['Totals across every shift', cpuNote.value].filter(Boolean).join(' · ')
-  if (!shown.value) return scope.value === 'active' && shifts.value.length ? 'No shift open. The next bunch scanned starts one.' : ''
+  if (!shown.value) return ''
   const when = viewingPast.value ? `Ran for ${shiftDuration(shown.value)}` : `Started ${shiftStart(shown.value)}`
   return [shown.value.name, when, cpuNote.value].filter(Boolean).join(' · ')
 })
@@ -159,6 +159,7 @@ async function load() {
     summary.value = summaryData
     trend.value = trendData.items
     shifts.value = shiftData.items
+    clock.value = shiftData.clock || null
     recent.value = scanData.items
   } catch (error) {
     emit('error', `Dashboard data unavailable: ${error.message}`)
@@ -167,17 +168,9 @@ async function load() {
   }
 }
 
-function onShiftStarted() {
-  starting.value = false
-  if (scope.value === 'active') load()
-  else scope.value = 'active'
-}
-
-// Show the shift just ended with its final totals; one without scans is not kept, so stay on the current view.
-function onShiftEnded(shift) {
-  ending.value = false
-  if (shift.scan_count) scope.value = shift.id
-  else load()
+function onShiftRenamed() {
+  renaming.value = false
+  load()
 }
 
 onMounted(load)
@@ -191,14 +184,16 @@ defineExpose({ load })
     <div class="dashboard-toolbar">
       <label class="inline-select">Showing <ShiftSelect v-model="scope" :shifts="shifts" /></label>
       <p class="muted shift-meta">{{ scopeNote }}</p>
-      <div class="shift-actions">
-        <button v-if="open && scope === 'active'" class="secondary-button" @click="ending = true">End shift</button>
-        <button class="secondary-button" @click="starting = true">Start new shift</button>
+      <div v-if="open && scope === 'active'" class="shift-actions">
+        <button class="secondary-button" @click="renaming = true">{{ open.name ? 'Rename shift' : 'Name shift' }}</button>
       </div>
+    </div>
+    <div v-if="clock && clock.trusted === false" class="alert" role="alert">
+      <span><b>The Pi's clock looks wrong.</b> It reads earlier than scans already recorded, so new scans may get the wrong date and today's shift will not change over. Connect the Pi to the internet, or check its RTC battery.</span>
     </div>
     <div v-if="viewingPast" class="scope-notice" role="status">
       <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
-      <span><b>Past shift.</b> These totals are final. New scans count toward the current shift.</span>
+      <span><b>Past shift.</b> These totals are final and its scans are read-only. New scans count toward today's shift.</span>
       <button class="text-button" @click="scope = 'active'">Back to current shift</button>
     </div>
 
@@ -275,7 +270,6 @@ defineExpose({ load })
       <ScanTable :scans="recent" :empty-text="`No scans ${emptyNote}.`" @select="$emit('select', $event)" @dispute="$emit('dispute', $event)" @void="$emit('void', $event)" />
     </div>
 
-    <StartShiftDialog :open="starting" :current="open" @close="starting = false" @started="onShiftStarted" />
-    <EndShiftDialog :open="ending" :current="open" @close="ending = false" @ended="onShiftEnded" />
+    <RenameShiftDialog :open="renaming" :current="open" @close="renaming = false" @renamed="onShiftRenamed" />
   </section>
 </template>

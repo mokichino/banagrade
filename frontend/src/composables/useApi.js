@@ -8,7 +8,7 @@ export async function request(path, options = {}) {
   if (!response.ok) {
     let detail = `Request failed: ${response.status}`
     try { detail = (await response.json()).detail || detail } catch { /* keep HTTP status */ }
-    throw new Error(detail)
+    throw Object.assign(new Error(detail), { status: response.status })
   }
   return response.status === 204 ? null : response.json()
 }

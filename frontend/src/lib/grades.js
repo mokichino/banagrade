@@ -21,6 +21,11 @@ export function isVoided(scan) {
   return Boolean(scan?.voided_at)
 }
 
+/** A scan from a shift that has ended: its day's totals are final, so it can no longer be disputed or voided. */
+export function isReadOnly(scan) {
+  return Boolean(scan?.shift_closed)
+}
+
 export function isTechnicalFailure(scan) {
   return !scan?.final_grade
 }

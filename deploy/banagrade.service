@@ -19,6 +19,9 @@ TimeoutStopSec=20
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
+# Lets the service set the clock from a dashboard's time when there is no internet (backend/app/clock.py): with no
+# RTC battery, a power cut leaves the clock behind. Nothing else needs root.
+AmbientCapabilities=CAP_SYS_TIME
 PrivateTmp=true
 
 [Install]

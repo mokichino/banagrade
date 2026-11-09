@@ -1,10 +1,10 @@
 """Drift indicators: recent production scans compared with the held-out test set.
 
-Baselines come from the final test evaluations in ``training/runs`` (Stage 1: 225 images through the
-app's own code path; Stage 2: 150 images). A warning means the table no longer looks like the test
+Baselines come from the final held-out test evaluations (Stage 1: 225 images through the app's own
+code path; Stage 2: 150 images). A warning means the table no longer looks like the test
 set, for example new lighting, a dirty lens, or a different cultivar. It does not mean the model is
 wrong, and it never changes a grade. The response is to review the disputed frames and decide whether
-to retrain (see docs/RELEASE_NOTES.md, "Retraining loop").
+to retrain.
 """
 
 from __future__ import annotations

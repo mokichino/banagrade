@@ -165,7 +165,7 @@ sudo -u banagrade /opt/banagrade/.venv/bin/python /opt/banagrade/backend/scripts
 Every captured frame is saved to `/var/lib/banagrade/frames` (about 0.9 MB each, newest 1,000 kept,
 `BANAGRADE_FRAME_KEEP`). Disputing a scan copies its frame into `/var/lib/banagrade/retrain`, and
 **System Status → Export disputed frames** downloads those frames with a `labels.csv` for review
-before retraining. The `training/` folder holds the training scripts and is not deployed.
+before retraining. The training scripts and results are kept outside this repository.
 
 PyTorch is installed from the CPU-only index first. The ARM64 wheel on PyPI is a CUDA build that
 pulls about 3 GB of NVIDIA libraries the Pi cannot use; with torch already present, Ultralytics

@@ -62,6 +62,47 @@ def classify_with(net: Any, transform: Any, names: dict[int, str], bgr: Any) -> 
     return str(names[top1]), float(probs[0, top1])
 
 
+def stage1_features_with(net: Any, transform: Any, bgr: Any) -> Any:
+    """Stage 1's 1280-value feature vector for an OpenCV BGR image: what its final layer reads to say Healthy or Unhealthy."""
+    import cv2
+    import torch
+    from PIL import Image
+
+    captured: dict[str, Any] = {}
+    handle = net.model[-1].linear.register_forward_hook(lambda module, inputs, output: captured.__setitem__("x", inputs[0]))
+    try:
+        with torch.inference_mode():
+            net(transform(Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))).unsqueeze(0))
+    finally:
+        handle.remove()
+    return captured["x"][0].float().numpy()
+
+
+def crop_box(bgr: Any, box: tuple[float, float, float, float]) -> Any:
+    height, width = bgr.shape[:2]
+    x1, y1, x2, y2 = (int(round(value)) for value in box)
+    return bgr[max(0, y1):min(height, y2), max(0, x1):min(width, x2)]
+
+
+# Bunch reference (models/stage 1/stage1_bunch_reference.npz, built from Stage 1's training photos): Stage 1's
+# features of the trigger-box crop of each of the 1,050 photos it was trained on. A new box is scored by how far it lies
+# from its 5 nearest training bunches (1 - mean cosine similarity). The photos Stage 1 never trained on (225 validation,
+# 225 test and 667 more) all score 0.28 or less, and the rig bunches 0.21 or less; the bond paper and white sheets scored
+# 0.49-0.63 and the hand on the velvet 0.40. The limit sits halfway between the highest unseen bunch and that hand.
+BUNCH_REFERENCE_K = 5
+DEFAULT_MAX_BUNCH_DISTANCE = 0.34
+
+
+def bunch_distance(features: Any, reference: Any, k: int = BUNCH_REFERENCE_K) -> float:
+    """1 - mean cosine similarity to the ``k`` nearest rows of ``reference`` (unit-length rows)."""
+    import numpy as np
+
+    vector = features / max(1e-9, float(np.linalg.norm(features)))
+    similarities = reference @ vector
+    nearest = np.partition(similarities, -k)[-k:] if len(similarities) > k else similarities
+    return float(1.0 - nearest.mean())
+
+
 class PresenceHit(NamedTuple):
     box: tuple[float, float, float, float]
     confidence: float
@@ -160,6 +201,7 @@ class UltralyticsInference:
         presence_path: str | Path | None = None,
         presence_confidence: float = 0.50,
         object_path: str | Path | None = None,
+        reference_path: str | Path | None = None,
     ) -> None:
         self.stage1_path = Path(stage1_path)
         self.stage2_path = Path(stage2_path)
@@ -167,6 +209,8 @@ class UltralyticsInference:
         self.presence_confidence = presence_confidence
         self.object_path = Path(object_path) if object_path else None
         self._objects: Any = None  # stock COCO YOLO11n for the hand and object check
+        self.reference_path = Path(reference_path) if reference_path else None
+        self._reference: Any = None  # Stage 1 features of the training bunches, unit-length rows
         self.length_axis = length_axis
         self._stage1: Any = None
         self._stage1_net: Any = None
@@ -191,6 +235,7 @@ class UltralyticsInference:
             os.getenv("BANAGRADE_PRESENCE_MODEL", str(project_models / "presence" / "best.pt")) or None,
             float(os.getenv("BANAGRADE_PRESENCE_CONF", "0.50")),
             os.getenv("BANAGRADE_OBJECT_MODEL", str(project_models / "presence" / "yolo11n.pt")) or None,
+            os.getenv("BANAGRADE_BUNCH_REFERENCE", str(project_models / "stage 1" / "stage1_bunch_reference.npz")) or None,
         )
 
     def load(self) -> None:
@@ -223,6 +268,7 @@ class UltralyticsInference:
         self._stage1_transform = stage1_transform()
         self._load_presence(YOLO)
         self._load_objects(YOLO)
+        self._load_reference()
         self._error = None
 
     def _load_presence(self, yolo: Any) -> None:
@@ -277,6 +323,32 @@ class UltralyticsInference:
             return
         self._objects = objects
 
+    def _load_reference(self) -> None:
+        """Stage 1 features of the training bunches. Optional: without them the bunch check is skipped."""
+        import numpy as np
+
+        self._reference = None
+        if self.reference_path is None:
+            return
+        if not self.reference_path.is_file():
+            self._model_errors["reference"] = f"Bunch reference not found: {self.reference_path}"
+            return
+        try:
+            features = np.load(self.reference_path)["features"].astype(np.float32)
+        except Exception as error:  # a corrupt optional file must not stop grading
+            self._model_errors["reference"] = f"Bunch reference failed to load: {error}"
+            return
+        self._reference = features / np.maximum(1e-9, np.linalg.norm(features, axis=1, keepdims=True))
+
+    def bunch_distance(self, image: Any, box: tuple[float, float, float, float]) -> float | None:
+        """How unlike the bunches Stage 1 was trained on the box's crop is (0 = identical); None without the reference."""
+        if self._reference is None or self._stage1_net is None:
+            return None
+        crop = crop_box(image, box)
+        if crop.size == 0:
+            return 1.0
+        return bunch_distance(stage1_features_with(self._stage1_net, self._stage1_transform, crop), self._reference)
+
     def check_objects(self, image: Any, trigger_box: tuple[float, float, float, float]) -> ObjectCheck:
         """Hands in view and other COCO objects on the trigger box; an empty result when the model is not loaded."""
         if self._objects is None:
@@ -316,6 +388,12 @@ class UltralyticsInference:
             "length_axis": self.length_axis,
             "empirical_threshold_px": float(os.getenv("BANAGRADE_WIDTH_THRESHOLD_PX", "2730.07")),
             "error": self._error,
+            "bunch_reference": {
+                "path": str(self.reference_path) if self.reference_path else None,
+                "loaded": self._reference is not None,
+                "training_bunches": int(len(self._reference)) if self._reference is not None else 0,
+                "error": self._model_errors.get("reference"),
+            },
             "models": [
                 {"key": "stage1", "label": self.stage1_path.name, "architecture": "YOLO11n-cls", "task": "Health screening (Healthy / Unhealthy)", "path": str(self.stage1_path), "state": self._model_state("stage1", self.stage1_path, self._stage1 is not None)},
                 {"key": "stage2", "label": self.stage2_path.name, "architecture": "YOLO11n-det", "task": "Whole-bunch detection (banana_bunch)", "path": str(self.stage2_path), "state": self._model_state("stage2", self.stage2_path, self._stage2 is not None)},

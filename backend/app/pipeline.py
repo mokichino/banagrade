@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import threading
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -24,8 +25,8 @@ from . import camera_tuning
 from .frames import save_frame
 from .grading import REFERENCE_RESOLUTION, Stage1Result, decide_grade, scale_width_to_reference, width_threshold_px
 from .leds import LedController, LedState
-from .model_inference import HAND_CONFIDENCE, PresenceHit
-from .preprocessing import MaskSettings, banana_share, frame_health, stage1_input
+from .model_inference import DEFAULT_MAX_BUNCH_DISTANCE, HAND_CONFIDENCE, PresenceHit
+from .preprocessing import MaskSettings, frame_health, stage1_input
 from .storage import SHIFT_FROM_SCAN, Storage, now_iso
 
 Publish = Callable[[dict[str, Any]], Awaitable[None]]
@@ -36,7 +37,7 @@ OVERLAY_READY = (94, 197, 34)  # green
 OVERLAY_PROBLEM = (38, 38, 220)  # red
 OVERLAY_GRADE = {"Class A": (0, 163, 217), "Class B": (235, 99, 37), "Rejected": (38, 38, 220)}
 OVERLAY_FAILURE = (128, 128, 128)
-NOT_A_BUNCH_LABEL = "Not a bunch · no banana colour"
+NOT_A_BUNCH_LABEL = "Not a bunch · unlike the trained bunches"
 STARTUP_HOLD_LABEL = "On the table at startup · remove it to scan"
 
 # The width threshold only holds at the thesis rig height (Section 3.6.3), lens to velvet surface.
@@ -45,6 +46,24 @@ RIG_DISTANCE_CM = 45
 # 1.012 dpt (2026-10-26). It does not follow 1 / metres (that would be 2.22), and autofocus on the bare
 # velvet locked anywhere from 0.69 to 1.31 dpt, so the lens is held here instead of autofocusing at boot.
 RIG_LENS_POSITION = "0.99"
+
+
+@dataclass(slots=True)
+class Candidate:
+    """A bunch seen but not captured yet: the scene must stay still around it before it is scanned."""
+
+    box: tuple[float, float, float, float]
+    signature: Any  # change signature of the frame it was first seen in
+    since: float
+    objects: Any = None  # the COCO hand/object check, run once per candidate
+
+
+def box_iou(a: tuple[float, ...], b: tuple[float, ...]) -> float:
+    width = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    height = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = width * height
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / union if union > 0 else 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,10 +142,16 @@ def import_picamera2() -> Any:
 
 
 class PresencePipeline:
+    # A trigger box at this confidence means "something is on the table": it is shown, and it keeps a result held.
     PRESENCE_CONFIDENCE = 0.80
+    # The scene must stay still this long around a bunch before it is captured (checked on every camera frame).
     STABILITY_WINDOW_S = 0.4
-    PREVIEW_INTERVAL_S = 0.2
-    PREVIEW_SIZE = (1280, 720)  # operator preview; detection still runs on a 640x360 copy
+    PREVIEW_INTERVAL_S = 0.2  # inline preview rate when the camera has no frame callback (tests)
+    PREVIEW_SIZE = (1280, 720)  # the camera's low-resolution stream; detection runs on a 640x360 copy
+    STREAM_SIZE = (960, 540)  # what the dashboard receives: about 45 KB a frame, so a phone hotspot keeps up
+    STREAM_FPS = 15
+    VIEWER_TIMEOUT_S = 3.0  # stop encoding the preview when nobody has asked for a frame this long
+    CANDIDATE_INTERVAL_S = 0.1  # loop pace while a bunch is waiting for the scene to settle
     DETECTION_SIZE = (640, 360)
     OVERLAY_TTL_S = 1.0  # drop a box that no detection has refreshed, so a stale box never lingers
     # An unchanged empty table (or an unchanged held bunch) skips the detectors, which cost ~505 ms per
@@ -149,6 +174,10 @@ class PresencePipeline:
         # A graded bunch is held until the table has looked empty this long without a break. One missed check
         # used to end the hold, so a hand straightening the bunch, or lifting it to turn it, started a new scan.
         self.release_s = float(os.getenv("BANAGRADE_RELEASE_S", "3"))
+        # Lowest trigger confidence that is captured. Every one of the 344 dataset bunches scored >= 0.93 and the
+        # rig bunches >= 0.91, while both hands that were scanned and stored as Rejected scored 0.83-0.84 (a flat
+        # palm is not a COCO "person"). Between PRESENCE_CONFIDENCE and this the box is shown but never captured.
+        self.capture_conf = float(os.getenv("BANAGRADE_CAPTURE_CONF", "0.90"))
         self.mask_settings = MaskSettings.from_environment()
         # The trained Stage 1 model saw raw frames; masking dropped held-out accuracy from 0.996 to 0.911.
         # Only enable this for a model retrained on HSV-masked images.
@@ -158,7 +187,7 @@ class PresencePipeline:
         self.frame_keep = int(os.getenv("BANAGRADE_FRAME_KEEP", "1000"))
         # The trigger's box must be at least this share banana-coloured to be graded (not paper, an empty tray).
         # The palest dataset bunch scored 0.276 and paper 0.004 or less, tinted or not; 0 disables the check.
-        self.min_banana_share = float(os.getenv("BANAGRADE_MIN_BANANA_SHARE", "0.10"))
+        self.max_bunch_distance = float(os.getenv("BANAGRADE_MAX_BUNCH_DISTANCE", str(DEFAULT_MAX_BUNCH_DISTANCE)))
         # Dioptres to hold the lens at, or "auto" for one autofocus cycle at boot.
         self.lens_setting = os.getenv("BANAGRADE_LENS_POSITION", RIG_LENS_POSITION).strip().lower()
         # White balance and exposure calibrated to match the dataset (camera_tuning.py), reapplied at every start.
@@ -187,6 +216,22 @@ class PresencePipeline:
         self._overlay: PreviewOverlay | None = None
         self._held_label = "Technical failure"
         self._held_color = OVERLAY_FAILURE
+        self._held_box: tuple[float, float, float, float] | None = None  # box of the held result, in DETECTION_SIZE px
+        self._candidate: Candidate | None = None
+        self._last_lores: Any = None  # newest camera frame at preview resolution, for the bunch check
+        self._distance_for: tuple[Any, float | None] | None = None  # (detector answer, its bunch distance)
+        self._last_signature: Any = None  # change signature of the latest frame
+        # Camera frames arrive through a Picamera2 callback; a preview thread encodes them for the dashboard.
+        self._frames = threading.Condition()
+        self._lores: Any = None
+        self._lores_seq = 0
+        self._lores_at = 0.0
+        self._frame_interval: float | None = None  # smoothed seconds between camera frames
+        self._used_seq = 0
+        self._jpeg_seq = 0
+        self._viewer_at = 0.0
+        self._preview_thread: threading.Thread | None = None
+        self._preview_stop = threading.Event()
         self._reference: Any = None  # change signature of the frame the detectors last ran on
         self._last_detection: PresenceHit | None = None
         self._last_model_check = 0.0
@@ -198,7 +243,27 @@ class PresencePipeline:
         return self._camera is not None
 
     def latest_jpeg(self) -> bytes | None:
+        self._viewer_at = time.monotonic()
         return self._latest_jpeg
+
+    @property
+    def preview_seq(self) -> int:
+        return self._jpeg_seq
+
+    async def next_jpeg(self, after: int, timeout: float = 1.0) -> tuple[int, bytes | None]:
+        """The newest preview frame once it is newer than ``after`` (or after ``timeout``), with its number.
+
+        The dashboard asks for one frame at a time, so a slow link only lowers the frame rate: frames never queue up
+        in a socket buffer the way a pushed MJPEG stream does, which is what made the preview lag seconds behind.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            self._viewer_at = time.monotonic()
+            if self._jpeg_seq != after and self._latest_jpeg is not None:
+                return self._jpeg_seq, self._latest_jpeg
+            if time.monotonic() >= deadline or not self.camera_available:
+                return self._jpeg_seq, self._latest_jpeg
+            await asyncio.sleep(0.015)
 
     async def status(self) -> dict[str, Any]:
         resolution = self.camera_resolution
@@ -210,6 +275,8 @@ class PresencePipeline:
             "last_scan_id": self.last_scan_id,
             "led": self.leds.status(),
             "motion_window_ms": int(self.STABILITY_WINDOW_S * 1000),
+            "capture_confidence": self.capture_conf,
+            "max_bunch_distance": self.max_bunch_distance,
             "trigger": dict(self.trigger_stats),
             "stage1_min_confidence": self.stage1_min_conf,
             "stage2_min_confidence": self.stage2_min_conf,
@@ -226,6 +293,7 @@ class PresencePipeline:
                 "expected_distance_cm": RIG_DISTANCE_CM,
                 "focus": self.focus_mode if self.lens_position is not None else ("unset" if self.camera_available else None),
                 "lens_position_dioptres": self.lens_position,
+                "frame_rate": round(1 / self._frame_interval, 1) if self._frame_interval else None,
                 "illumination": self.illumination,
                 "white_balance": (
                     {"mode": "locked", "colour_gains": self.camera_settings["colour_gains"], "set_at": self.camera_settings.get("white_balance_set_at")}
@@ -264,6 +332,12 @@ class PresencePipeline:
         self.leds.close()
 
     def _close_camera(self) -> None:
+        self._preview_stop.set()
+        with self._frames:
+            self._frames.notify_all()
+        if self._preview_thread is not None:
+            self._preview_thread.join(timeout=2)
+        self._preview_thread = None
         if self._camera is not None:
             try:
                 self._camera.stop()
@@ -301,11 +375,16 @@ class PresencePipeline:
         config = camera.create_still_configuration(
             main={"size": (width, height), "format": "RGB888"},
             lores={"size": self.PREVIEW_SIZE, "format": "RGB888"},
-            buffer_count=2,
+            # Three buffers keep frames flowing to the preview while a full-resolution capture holds one.
+            buffer_count=3,
         )
         camera.configure(config)
+        camera.post_callback = self._on_frame
         camera.start()
         self._camera = camera
+        self._preview_stop.clear()
+        self._preview_thread = threading.Thread(target=self._preview_worker, name="banagrade-preview", daemon=True)
+        self._preview_thread.start()
         self.camera_resolution = (width, height)
         self._lock_focus()
         self._apply_camera_settings()
@@ -351,21 +430,78 @@ class PresencePipeline:
         self.state = state
         await self._emit("fsm_state_changed", {"state": state})
 
-    # ----------------------------------------------------------------- main loop
-    async def _capture_lores(self) -> Any:
-        frame = await asyncio.to_thread(self._camera.capture_array, "lores")
+    # ------------------------------------------------------------ camera frames
+    def _on_frame(self, request: Any) -> None:
+        """Picamera2 post-callback, on the camera thread for every frame: keep a copy of the low-resolution image.
+
+        The preview used to be refreshed only between detector runs, so it froze for ~0.2-0.5 s at a time and never
+        passed 5 fps; now every camera frame reaches it, whatever the trigger is doing.
+        """
+        try:
+            frame = request.make_array("lores")
+        except Exception:  # a frame without the stream (reconfiguring) is skipped
+            return
+        now = time.monotonic()
+        with self._frames:
+            if self._lores_at:
+                interval = now - self._lores_at
+                self._frame_interval = interval if self._frame_interval is None else 0.9 * self._frame_interval + 0.1 * interval
+            self._lores, self._lores_at = frame, now
+            self._lores_seq += 1
+            self._frames.notify_all()
+
+    def _preview_worker(self) -> None:
+        """Encode the newest camera frame, with the trigger's box, for the dashboard at up to STREAM_FPS."""
+        last = 0
+        while not self._preview_stop.is_set():
+            with self._frames:
+                self._frames.wait_for(lambda: self._lores_seq != last or self._preview_stop.is_set(), timeout=1.0)
+                frame, seq = self._lores, self._lores_seq
+            if frame is None or seq == last or self._preview_stop.is_set():
+                continue
+            last = seq
+            if time.monotonic() - self._viewer_at > self.VIEWER_TIMEOUT_S:
+                continue  # nobody is watching; save the CPU for the detectors
+            started = time.monotonic()
+            try:
+                self._encode_preview(frame)
+            except Exception:  # the preview must never take the camera down
+                pass
+            time.sleep(max(0.0, 1 / self.STREAM_FPS - (time.monotonic() - started)))
+
+    def _encode_preview(self, frame: Any) -> None:
         import cv2
 
+        preview = cv2.resize(frame, self.STREAM_SIZE, interpolation=cv2.INTER_AREA) if frame.shape[1] != self.STREAM_SIZE[0] else frame
+        overlay = self._overlay
         now = time.monotonic()
-        if now - self._latest_jpeg_at >= self.PREVIEW_INTERVAL_S:
-            preview = frame
-            overlay = self._overlay
-            if overlay is not None and now - overlay.updated_at <= self.OVERLAY_TTL_S:
-                preview = draw_overlay(frame, overlay, frame.shape[1] / self.DETECTION_SIZE[0])
-            ok, encoded = cv2.imencode(".jpg", preview, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            if ok:
-                self._latest_jpeg = encoded.tobytes()
-                self._latest_jpeg_at = now
+        if overlay is not None and now - overlay.updated_at <= self.OVERLAY_TTL_S:
+            preview = draw_overlay(preview, overlay, preview.shape[1] / self.DETECTION_SIZE[0])
+        ok, encoded = cv2.imencode(".jpg", preview, [cv2.IMWRITE_JPEG_QUALITY, 75])
+        if ok:
+            self._latest_jpeg = encoded.tobytes()
+            self._latest_jpeg_at = now
+            self._jpeg_seq += 1
+
+    def _next_lores(self) -> Any:
+        """The next camera frame the trigger has not used yet (waits for one)."""
+        with self._frames:
+            if not self._frames.wait_for(lambda: self._lores_seq != self._used_seq, timeout=3.0):
+                raise RuntimeError("The camera stopped delivering frames")
+            self._used_seq = self._lores_seq
+            return self._lores
+
+    # ----------------------------------------------------------------- main loop
+    async def _capture_lores(self) -> Any:
+        import cv2
+
+        if self._preview_thread is not None:
+            frame = await asyncio.to_thread(self._next_lores)
+        else:  # no frame callback (tests): read the stream directly and refresh the preview inline
+            frame = await asyncio.to_thread(self._camera.capture_array, "lores")
+            if time.monotonic() - self._latest_jpeg_at >= self.PREVIEW_INTERVAL_S:
+                self._encode_preview(frame)
+        self._last_lores = frame
         return cv2.resize(frame, self.DETECTION_SIZE, interpolation=cv2.INTER_AREA)
 
     def _capture_with_metadata(self) -> tuple[Any, dict[str, Any]]:
@@ -387,7 +523,7 @@ class PresencePipeline:
         finally:
             self._calibrating = False
         # Only after a calibration that ran: the sheet or bunch used for it is held, not scanned.
-        self._hold, self._empty_since = True, None
+        self._hold, self._empty_since, self._held_box = True, None, None
         self._held_label, self._held_color = "Calibration · remove it to scan", OVERLAY_FAILURE
         camera_tuning.save_settings(self.camera_settings_path, self.camera_settings)
         return result
@@ -499,6 +635,7 @@ class PresencePipeline:
             if detection is None:
                 self._overlay = None
                 self._ignored_label = None
+                self._candidate = None
                 if self._hold:
                     now = time.monotonic()
                     if self._empty_since is None:
@@ -509,6 +646,7 @@ class PresencePipeline:
                     self._empty_since = None
                 if self._hold or self.state is not PipelineState.IDLE:
                     self._hold = False
+                    self._held_box = None
                     await self._set_state(PipelineState.IDLE)
                     self.leds.set(LedState.READY)
                 await asyncio.sleep(self.presence_interval_s)
@@ -520,42 +658,47 @@ class PresencePipeline:
                 await asyncio.sleep(self.presence_interval_s)
                 continue
             if self._hold:  # result shown until the bunch is removed
-                self._show(box, self._held_label, self._held_color)
+                # The box the result was measured on stays put; the detector's own box wobbles from frame to frame.
+                # Only a bunch that has really been moved gets the live box.
+                held = self._held_box if self._held_box is not None and box_iou(self._held_box, box) >= 0.5 else box
+                self._show(held, self._held_label, self._held_color)
                 await asyncio.sleep(self.presence_interval_s)
                 continue
-            # The trigger was trained on bunches only and also boxes paper; show those, never capture them.
-            if self._ignored_label is None and banana_share(frame, box) < self.min_banana_share:
-                self._ignored_label = NOT_A_BUNCH_LABEL
+            # The trigger was trained on bunches only and also boxes paper and hands; show those, never capture them.
+            if self._ignored_label is None:
+                if confidence < self.capture_conf:
+                    self._ignored_label = f"Unsure it is a bunch ({confidence:.2f}, needs {self.capture_conf:.2f})"
+                else:
+                    distance = await self._preview_bunch_distance(detection, box)
+                    if distance is not None and distance > self.max_bunch_distance:
+                        self._ignored_label = f"{NOT_A_BUNCH_LABEL} ({distance:.2f})"
             if self._ignored_label:
+                self._candidate = None
                 self._show(box, self._ignored_label, OVERLAY_FAILURE)
                 if self.state is not PipelineState.IDLE:
                     await self._set_state(PipelineState.IDLE)
                     self.leds.set(LedState.READY)
                 await asyncio.sleep(self.presence_interval_s)
                 continue
-            # Checked at first sight too: a moving hand never passes the stability check, so it would
-            # otherwise be shown as a bunch until it held still.
-            if not await self._objects_clear(frame, box):
-                await asyncio.sleep(self.presence_interval_s)
-                continue
-            self._show(box, f"Checking {confidence:.2f} ({source}) · hold still", OVERLAY_CHECKING)
-            await self._set_state(PipelineState.PRESENCE_DETECTED)
-            await self._emit("presence_detected")
-            if await self._stable_and_in_frame(frame, box):
+            if await self._ready_to_capture(frame, box, confidence, source):
+                self._candidate = None
                 await self._process_scan()
                 self._hold = True
+            else:
+                await asyncio.sleep(min(self.CANDIDATE_INTERVAL_S, self.presence_interval_s))
 
     async def _presence_check(self, frame: Any) -> PresenceHit | None:
         """Run the trigger detectors, or reuse their last answer when nothing in the frame has changed.
 
-        Reuse is limited to the two steady states: an empty table, and a held bunch still sitting there.
-        A bunch that was seen but not yet captured is always checked again.
+        An unchanged frame gives the same answer, so the detectors only run when something moved, and at least every
+        FORCED_CHECK_S for lighting drift and a second look. Reusing the answer also keeps the box from wobbling
+        on a bunch that lies still.
         """
         signature = change_signature(frame)
+        self._last_signature = signature
         now = time.monotonic()
         changed = self._reference is None or frame_changed(self._reference, signature)
-        steady = self._last_detection is None or self._hold or self._ignored_label is not None
-        if steady and not changed and now - self._last_model_check < self.FORCED_CHECK_S:
+        if not changed and now - self._last_model_check < self.FORCED_CHECK_S:
             self.trigger_stats["skipped_unchanged"] += 1
             return self._last_detection
         if changed:  # something moved on the table, so an ignored object gets a fresh look
@@ -565,15 +708,63 @@ class PresencePipeline:
         self._reference, self._last_detection, self._last_model_check = signature, detection, now
         return detection
 
+    async def _bunch_distance(self, image: Any, box: tuple[float, float, float, float]) -> float | None:
+        """Stage 1's distance from the box's crop to the bunches it was trained on; None when that check is unavailable."""
+        measure = getattr(self.inference, "bunch_distance", None)
+        return await asyncio.to_thread(measure, image, box) if measure else None
+
+    async def _preview_bunch_distance(self, detection: PresenceHit, box: tuple[float, float, float, float]) -> float | None:
+        """The bunch check on the camera's 1280x720 frame, once per detector answer (it is reused while the frame is unchanged)."""
+        if self._distance_for is not None and self._distance_for[0] is detection:
+            return self._distance_for[1]
+        frame = self._last_lores
+        if frame is None:
+            return None
+        scale = frame.shape[1] / self.DETECTION_SIZE[0]
+        distance = await self._bunch_distance(frame, tuple(value * scale for value in box))  # type: ignore[arg-type]
+        self._distance_for = (detection, distance)
+        return distance
+
     def _show(self, box: tuple[float, float, float, float], label: str, color: tuple[int, int, int]) -> None:
         self._overlay = PreviewOverlay(box, label, color, time.monotonic())
 
-    async def _objects_clear(self, frame: Any, box: tuple[float, float, float, float]) -> bool:
-        """False, with the reason on the box, when a hand is in view or the box is on another COCO object.
+    async def _ready_to_capture(self, frame: Any, box: tuple[float, float, float, float], confidence: float, source: str) -> bool:
+        """True once the scene has stayed still around the bunch for STABILITY_WINDOW_S and nothing else is in the way.
 
-        Stage 1 judges the whole frame, so a hand in view can sway it; other COCO objects are not bunches.
+        Stillness is judged on the camera frames themselves, not by comparing two detector boxes: the boxes moved by
+        more than the old 3% tolerance on a bunch lying flat, so a still bunch was often sent back to "hold still"
+        and waited another 1.3 s round (sleep, detector, COCO check) before it was scanned.
         """
-        objects = await asyncio.to_thread(self.inference.check_objects, frame, box)
+        now = time.monotonic()
+        signature = self._last_signature if self._last_signature is not None else change_signature(frame)
+        candidate = self._candidate
+        if candidate is None or frame_changed(candidate.signature, signature) or box_iou(candidate.box, box) < 0.6:
+            first = candidate is None
+            self._candidate = Candidate(box, signature, now)
+            self._show(box, f"Checking {confidence:.2f} ({source}) · hold still", OVERLAY_CHECKING)
+            if first:
+                await self._set_state(PipelineState.PRESENCE_DETECTED)
+                await self._emit("presence_detected")
+            if self.STABILITY_WINDOW_S > 0:
+                return False
+            candidate = self._candidate
+        width = self.DETECTION_SIZE[0]
+        margin = 2
+        # Only the sides: the grade is the box's horizontal width, so a bunch cut off at the left or right is measured
+        # too narrow (an A comes out B). Running off the top or bottom leaves the width whole, and big bunches do it in
+        # 34 of the 336 dataset photos, against 1 at a side.
+        if box[0] <= margin or box[2] >= width - margin:
+            side, way = ("left", "right") if box[0] <= margin else ("right", "left")
+            self._show(box, f"Checking {confidence:.2f} ({source}) · touching the {side} edge, move it {way}", OVERLAY_PROBLEM)
+            return False
+        if now - candidate.since < self.STABILITY_WINDOW_S:
+            self._show(box, f"Checking {confidence:.2f} ({source}) · hold still", OVERLAY_CHECKING)
+            return False
+        # Stage 1 judges the whole frame, so a hand in view can sway it; other COCO objects are not bunches. Run once
+        # per still scene: a hand resting in view is re-checked only after something moves.
+        if candidate.objects is None:
+            candidate.objects = await asyncio.to_thread(self.inference.check_objects, frame, box)
+        objects = candidate.objects
         if objects.hand >= HAND_CONFIDENCE:
             self._show(box, f"Hand in view ({objects.hand:.2f}) · let go to scan", OVERLAY_CHECKING)
             return False
@@ -582,32 +773,8 @@ class PresencePipeline:
             self._ignored_label = f"Not a bunch · looks like a {name} ({score:.2f})"
             self._show(box, self._ignored_label, OVERLAY_FAILURE)
             return False
-        return True
-
-    async def _stable_and_in_frame(self, first_frame: Any, first: tuple[float, float, float, float]) -> bool:
-        await asyncio.sleep(self.STABILITY_WINDOW_S)
-        second = await self._capture_lores()
-        detection = await asyncio.to_thread(self.inference.detect_presence, second, self.PRESENCE_CONFIDENCE)
-        if detection is None:
-            self._overlay = None
-            return False
-        current, confidence, source = detection
-        height, width = second.shape[:2]
-        margin = 2
-        # Only the sides: the grade is the box's horizontal width, so a bunch cut off at the left or right is measured
-        # too narrow (an A comes out B). Running off the top or bottom leaves the width whole, and big bunches do it in
-        # 34 of the 336 dataset photos, against 1 at a side.
-        if current[0] <= margin or current[2] >= width - margin:
-            side, way = ("left", "right") if current[0] <= margin else ("right", "left")
-            self._show(current, f"Checking {confidence:.2f} ({source}) · touching the {side} edge, move it {way}", OVERLAY_PROBLEM)
-            return False
-        if max(abs(a - b) for a, b in zip(first, current)) > max(width, height) * 0.03:
-            self._show(current, f"Checking {confidence:.2f} ({source}) · moving, hold still", OVERLAY_CHECKING)
-            return False
-        if not await self._objects_clear(second, current):  # a hand may have come in during the window
-            return False
-        self._show(current, f"Bunch {confidence:.2f} ({source}) · scanning", OVERLAY_READY)
-        self._capture_box = current
+        self._show(box, f"Bunch {confidence:.2f} ({source}) · scanning", OVERLAY_READY)
+        self._capture_box = box
         return True
 
     async def _process_scan(self) -> None:
@@ -619,6 +786,7 @@ class PresencePipeline:
         threshold = width_threshold_px()
         image = None
         stage1 = None
+        self._held_box = self._capture_box
         frame_refs = [str(self.frame_dir / f"{scan_id}.jpg")] if self.frame_keep > 0 else None
         try:
             await self._set_state(PipelineState.CAPTURING)
@@ -627,9 +795,9 @@ class PresencePipeline:
             scale = image.shape[1] / self.DETECTION_SIZE[0]
             box = tuple(value * scale for value in self._capture_box) if self._capture_box else None
             self._capture_box = None
-            share = await asyncio.to_thread(banana_share, image, box)
-            if share < self.min_banana_share:
-                raise NotABunch(f"Only {share:.1%} of the bunch's box is banana-coloured (needs {self.min_banana_share:.0%}), so it is not graded as a bunch")
+            distance = await self._bunch_distance(image, box) if box is not None else None
+            if distance is not None and distance > self.max_bunch_distance:
+                raise NotABunch(f"Unlike the bunches Stage 1 was trained on: distance {distance:.2f} (limit {self.max_bunch_distance:.2f})")
 
             await self._set_state(PipelineState.CLASSIFYING)
             prepared = await asyncio.to_thread(self._stage1_image, image)
@@ -647,6 +815,10 @@ class PresencePipeline:
                 stage2 = await asyncio.to_thread(self.inference.detect, image)
                 if stage2.pixel_length is not None:
                     width_ref = scale_width_to_reference(stage2.pixel_length, stage2.image_width)
+                if stage2.bbox_xyxy is not None:
+                    # Hold the box the bunch was measured on, so the preview shows what was graded.
+                    to_detection = self.DETECTION_SIZE[0] / stage2.image_width
+                    self._held_box = tuple(value * to_detection for value in stage2.bbox_xyxy)  # type: ignore[assignment]
 
             await self._set_state(PipelineState.GRADING)
             weak_detection = stage2 is not None and stage2.detected and (stage2.confidence or 0.0) < self.stage2_min_conf
@@ -670,7 +842,10 @@ class PresencePipeline:
                 "stage_timings": {"stage1_ms": stage1.duration_ms, "stage2_ms": stage2.duration_ms if stage2 else None},
                 "image_refs": frame_refs,
                 "model_metadata": {"stage1": self.inference.stage1_path.name, "stage2": self.inference.stage2_path.name},
-                "threshold_values": {"width_threshold_px": threshold, "reference_resolution": list(REFERENCE_RESOLUTION), "axis": self.inference.length_axis},
+                "threshold_values": {
+                    "width_threshold_px": threshold, "reference_resolution": list(REFERENCE_RESOLUTION), "axis": self.inference.length_axis,
+                    "bunch_distance": distance, "max_bunch_distance": self.max_bunch_distance,
+                },
                 "error_details": f"Stage 2 confidence {stage2.confidence:.2f} is below {self.stage2_min_conf:.2f}" if weak_detection else None,
             }
             await self._set_state(PipelineState.PERSISTING)

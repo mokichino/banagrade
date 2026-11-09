@@ -282,6 +282,18 @@ describe('lens focus and power', () => {
     expect(wrapper.find('.camera-preview').classes()).not.toContain('expanded')
   })
 
+  it('CameraCard asks for the next preview frame only once the last one has loaded', async () => {
+    const wrapper = mount(CameraCard, { props: { pipeline: camera({ focus: 'fixed', lens_position_dioptres: 0.99 }) } })
+    const img = () => wrapper.find('.camera-frame img')
+    const first = img().attributes('src')
+    expect(first).toMatch(/^\/api\/camera\/preview\.jpg\?n=/)
+    await img().trigger('load')
+    const second = img().attributes('src')
+    expect(second).not.toBe(first)
+    for (let i = 0; i < 5; i += 1) await img().trigger('error')
+    expect(wrapper.find('.camera-offline').exists()).toBe(true)
+  })
+
   it('CameraCard checks the camera alignment from a sheet and outlines it', async () => {
     const tilted = { corners: [[1100, 650], [3095, 650], [3250, 2229], [948, 2291]], front_back_ratio: 1.154, side_ratio: 0.962, front_back_tilt_deg: 17.9, side_tilt_deg: -3.7, height_cm: 46.3, level: false, height_ok: true }
     const fetch = mockFetch({ '/api/camera/alignment': tilted })

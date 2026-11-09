@@ -40,9 +40,15 @@ class FakeInference:
         return Stage1Prediction(self.label, self.confidence, 12.0)
 
     objects = ObjectCheck(0.0, None)
+    distance = 0.05  # Stage 1's distance from the box to the trained bunches; real bunches score <= 0.28
+    distance_calls = 0
 
     def check_objects(self, image, trigger_box):
         return self.objects
+
+    def bunch_distance(self, image, box):
+        self.distance_calls += 1
+        return self.distance
 
     def detect(self, image):
         self.stage2_calls += 1
@@ -201,32 +207,59 @@ def test_draw_overlay_scales_the_box_and_leaves_the_model_frame_untouched() -> N
     assert drawn[350, 400].tolist() == [0, 0, 0]  # inside the box stays clear
 
 
+def _placed(seed: int = 1, left: int = 160, right: int = 480):
+    frame = _velvet(seed)
+    frame[90:270, left:right] = (40, 200, 220)
+    return frame
+
+
 @pytest.mark.parametrize(
-    ("second", "stable", "label", "color"),
+    ("box", "ready", "label", "color"),
     [
-        (((101.0, 101.0, 301.0, 251.0), 0.91, "Stage 2"), True, "Bunch 0.91 (Stage 2) · scanning", OVERLAY_READY),
-        (((180.0, 100.0, 380.0, 250.0), 0.91, "Stage 2"), False, "Checking 0.91 (Stage 2) · moving, hold still", OVERLAY_CHECKING),
-        (((0.0, 100.0, 200.0, 250.0), 0.91, "backup"), False, "Checking 0.91 (backup) · touching the left edge, move it right", OVERLAY_PROBLEM),
-        (((120.0, 100.0, 640.0, 250.0), 0.91, "backup"), False, "Checking 0.91 (backup) · touching the right edge, move it left", OVERLAY_PROBLEM),
-        (None, False, None, None),
+        ((101.0, 101.0, 301.0, 251.0), True, "Bunch 0.91 (Stage 2) · scanning", OVERLAY_READY),
+        ((0.0, 100.0, 200.0, 250.0), False, "Checking 0.91 (Stage 2) · touching the left edge, move it right", OVERLAY_PROBLEM),
+        ((120.0, 100.0, 640.0, 250.0), False, "Checking 0.91 (Stage 2) · touching the right edge, move it left", OVERLAY_PROBLEM),
     ],
 )
-def test_stability_check_labels_the_preview_box(tmp_path, second, stable, label, color) -> None:
-    pipeline = _pipeline(tmp_path, SequenceDetector([second]))
-    assert asyncio.run(pipeline._stable_and_in_frame(None, (100.0, 100.0, 300.0, 250.0))) is stable
-    if label is None:
-        assert pipeline._overlay is None
-    else:
-        assert (pipeline._overlay.label, pipeline._overlay.color) == (label, color)
+def test_capture_check_labels_the_preview_box(tmp_path, box, ready, label, color) -> None:
+    pipeline = _pipeline(tmp_path, FakeInference("Healthy", 2800.0))
+    assert asyncio.run(pipeline._ready_to_capture(_placed(), box, 0.91, "Stage 2")) is ready
+    assert (pipeline._overlay.label, pipeline._overlay.color) == (label, color)
+    assert pipeline._capture_box == (box if ready else None)
 
 
-@pytest.mark.parametrize("first", [(100.0, 0.0, 300.0, 250.0), (100.0, 110.0, 300.0, 360.0)])
-def test_a_big_bunch_may_run_off_the_top_or_bottom(tmp_path, first) -> None:
+@pytest.mark.parametrize("box", [(100.0, 0.0, 300.0, 250.0), (100.0, 110.0, 300.0, 360.0)])
+def test_a_big_bunch_may_run_off_the_top_or_bottom(tmp_path, box) -> None:
     # Its whole width is still in view, and big bunches do this in 34 of the 336 dataset photos.
-    second = (first[0] + 1, first[1], first[2] + 1, first[3])
-    pipeline = _pipeline(tmp_path, SequenceDetector([(second, 0.96, "presence")]))
-    assert asyncio.run(pipeline._stable_and_in_frame(None, first)) is True
+    pipeline = _pipeline(tmp_path, FakeInference("Healthy", 2800.0))
+    assert asyncio.run(pipeline._ready_to_capture(_placed(), box, 0.96, "presence")) is True
     assert pipeline._overlay.label == "Bunch 0.96 (presence) · scanning"
+
+
+def test_capture_waits_until_the_scene_has_been_still_for_the_window(tmp_path, monkeypatch) -> None:
+    detector = FakeInference("Healthy", 2800.0)
+    pipeline = _pipeline(tmp_path, detector)
+    pipeline.STABILITY_WINDOW_S = 0.4
+    clock = [100.0]
+    monkeypatch.setattr("app.pipeline.time.monotonic", lambda: clock[0])
+    box = (160.0, 90.0, 480.0, 270.0)
+    checks = []
+    detector.check_objects = lambda image, trigger_box: checks.append(1) or ObjectCheck(0.0, None)
+
+    def ready(frame):
+        pipeline._last_signature = None
+        return asyncio.run(pipeline._ready_to_capture(frame, box, 0.95, "presence"))
+
+    assert ready(_placed(1)) is False  # first sight
+    clock[0] += 0.2
+    assert ready(_placed(2)) is False and pipeline._overlay.label == "Checking 0.95 (presence) · hold still"
+    clock[0] += 0.1
+    assert ready(_placed(3, left=200, right=520)) is False  # slid sideways: the window starts again
+    clock[0] += 0.3
+    assert ready(_placed(4, left=200, right=520)) is False
+    clock[0] += 0.15
+    assert ready(_placed(5, left=200, right=520)) is True  # 0.45 s without a change, sensor noise aside
+    assert checks == [1]  # the COCO check ran once, only when the scene was still
 
 
 def test_held_result_shows_the_grade_on_the_box(tmp_path) -> None:
@@ -251,12 +284,41 @@ def test_preview_draws_a_fresh_box_and_drops_a_stale_one(tmp_path, monkeypatch) 
     detection_frame = asyncio.run(pipeline._capture_lores())
     assert not detection_frame.any()
     preview = cv2.imdecode(np.frombuffer(pipeline.latest_jpeg(), np.uint8), cv2.IMREAD_COLOR)
-    assert preview[350, 200, 1] > 150  # green left edge survives JPEG
+    assert preview.shape == (540, 960, 3)  # sent smaller than the camera's 1280x720 so a hotspot keeps up
+    assert preview[262, 150, 1] > 150  # green left edge (x 100 * 1.5) survives JPEG
 
     monkeypatch.setattr(pipeline, "OVERLAY_TTL_S", -1)
     asyncio.run(pipeline._capture_lores())
     stale = cv2.imdecode(np.frombuffer(pipeline.latest_jpeg(), np.uint8), cv2.IMREAD_COLOR)
-    assert stale[350, 200].max() < 30
+    assert stale[262, 150].max() < 30
+
+
+def test_preview_frames_come_from_the_camera_callback_not_the_trigger_loop(tmp_path) -> None:
+    cv2 = pytest.importorskip("cv2")
+    pipeline = _pipeline(tmp_path, FakeInference("Healthy", 2800.0))
+
+    class Request:
+        def __init__(self, value):
+            self.value = value
+
+        def make_array(self, stream):
+            assert stream == "lores"
+            return np.full((720, 1280, 3), self.value, np.uint8)
+
+    pipeline._viewer_at = 1e12  # someone is watching
+    pipeline._preview_thread = __import__("threading").Thread(target=pipeline._preview_worker, daemon=True)
+    pipeline._preview_thread.start()
+    try:
+        for value in (10, 90):
+            before = pipeline._jpeg_seq
+            pipeline._on_frame(Request(value))
+            seq, jpeg = asyncio.run(pipeline.next_jpeg(before, timeout=2.0))
+            assert seq > before
+            assert abs(float(cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR).mean()) - value) < 3
+        assert asyncio.run(pipeline._capture_lores()).shape == (360, 640, 3)  # the trigger reads the same frames
+    finally:
+        pipeline._close_camera()
+    assert pipeline._preview_thread is None
 
 
 class CountingDetector(FakeInference):
@@ -316,8 +378,12 @@ def test_a_change_runs_the_detectors_and_an_unseen_bunch_is_rechecked(tmp_path, 
     assert asyncio.run(pipeline._presence_check(placed)) == detector.bunch
     assert detector.runs == 2
 
-    # Seen but not captured yet (e.g. still moving): never reused, always checked again.
+    # Unchanged frame: the same answer, so the box does not wobble on a bunch that lies still.
     asyncio.run(pipeline._presence_check(placed))
+    assert detector.runs == 2
+    moved = _velvet(2)
+    moved[60:240, 100:420] = (60, 180, 200)
+    asyncio.run(pipeline._presence_check(moved))
     assert detector.runs == 3
 
 
@@ -361,30 +427,29 @@ def test_weak_stage2_box_is_a_technical_failure_not_a_grade(tmp_path) -> None:
 
 
 
-class PaperCamera(FakeCamera):
-    """A white sheet on the velvet: bright but colourless, like the paper graded Class B on 2026-10-26."""
-
-    def capture_array(self, stream: str):
-        frame = super().capture_array(stream)
-        frame[frame[..., 2] == 220] = 235
-        return frame
-
-
-def test_colourless_object_is_not_graded(tmp_path) -> None:
+def test_object_unlike_the_trained_bunches_is_not_graded(tmp_path) -> None:
+    # The bond sheets of 2026-11-08 scored 0.49 and 0.63 from the trained bunches, and Stage 1 called them Unhealthy.
     storage = Storage(tmp_path / "p.db")
     storage.initialize()
     storage.ensure_active_session()
-    inference = FakeInference("Healthy", 2400.0)
+    inference = FakeInference("Unhealthy", 2400.0)
+    inference.distance = 0.63
     pipeline = PresencePipeline(storage, inference, LedController(outputs=None))
-    pipeline._camera = PaperCamera()
+    pipeline._camera = FakeCamera()
+    pipeline._capture_box = (150.0, 60.0, 450.0, 300.0)
     asyncio.run(pipeline._process_scan())
     scan = storage.get_scan(pipeline.last_scan_id)
-    assert scan["final_grade"] is None
-    assert scan["rejection_reason"] == "NOT_A_BUNCH"
-    assert "banana-coloured" in scan["error_details"]
+    assert (scan["final_grade"], scan["rejection_reason"]) == (None, "NOT_A_BUNCH")
+    assert scan["error_details"] == "Unlike the bunches Stage 1 was trained on: distance 0.63 (limit 0.34)"
     assert inference.stage1_inputs == [] and inference.stage2_calls == 0
     assert pipeline.leds.state is LedState.CHECK
-    assert pipeline._held_label == "Not a bunch · no banana colour"
+    assert pipeline._held_label == "Not a bunch · unlike the trained bunches"
+
+
+def test_a_graded_bunch_records_its_distance_from_the_trained_bunches(tmp_path) -> None:
+    scan, _ = _run_on(FakeCamera(), tmp_path)
+    values = json.loads(scan["threshold_values"])
+    assert (values["bunch_distance"], values["max_bunch_distance"]) == (0.05, 0.34)
 
 
 class FocusCamera:
@@ -438,12 +503,15 @@ def test_trigger_box_on_paper_is_labelled_and_never_captured(tmp_path, monkeypat
     paper[60:300, 150:450] = (232, 236, 238)
     frames = [_velvet(2)] * 8 + [paper] * 8  # 2 s of empty table clears the startup hold, then the sheet
 
+    detector.distance = 0.49
+
     async def capture():
         if not frames:
             raise asyncio.CancelledError
         clock[0] += 0.25
         frame = frames.pop(0)
-        detector.bunch = ((150.0, 60.0, 450.0, 300.0), 0.93, "presence") if frame is paper else None
+        pipeline._last_lores = frame
+        detector.bunch = ((150.0, 60.0, 450.0, 300.0), 0.96, "presence") if frame is paper else None
         return frame
 
     async def no_scan():
@@ -453,9 +521,10 @@ def test_trigger_box_on_paper_is_labelled_and_never_captured(tmp_path, monkeypat
     monkeypatch.setattr(pipeline, "_process_scan", no_scan)
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(pipeline._run())
-    assert pipeline._overlay.label == "Not a bunch · no banana colour"
+    assert pipeline._overlay.label == "Not a bunch · unlike the trained bunches (0.49)"
     assert pipeline.state is PipelineState.IDLE and pipeline.leds.state is LedState.READY
     assert detector.runs <= 3  # the unchanged sheet is not re-checked every frame
+    assert detector.distance_calls <= detector.runs  # and Stage 1 looks at it once per detector answer
 
 
 def _held_run(tmp_path, monkeypatch, script):
@@ -480,7 +549,7 @@ def _held_run(tmp_path, monkeypatch, script):
     async def presence(frame):
         return ((80.0, 45.0, 240.0, 135.0), 0.95, "presence") if pipeline._seen else None
 
-    async def stable(frame, box):
+    async def ready(frame, box, confidence, source):
         return True
 
     async def scan():
@@ -488,7 +557,7 @@ def _held_run(tmp_path, monkeypatch, script):
 
     monkeypatch.setattr(pipeline, "_capture_lores", capture)
     monkeypatch.setattr(pipeline, "_presence_check", presence)
-    monkeypatch.setattr(pipeline, "_stable_and_in_frame", stable)
+    monkeypatch.setattr(pipeline, "_ready_to_capture", ready)
     monkeypatch.setattr(pipeline, "_process_scan", scan)
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(pipeline._run())
@@ -536,10 +605,10 @@ def test_object_check_finds_hands_and_other_objects_but_not_bananas() -> None:
     ],
 )
 def test_hand_or_other_object_stops_the_capture(tmp_path, objects, label, ignored) -> None:
-    detector = SequenceDetector([((101.0, 101.0, 301.0, 251.0), 0.91, "presence")])
+    detector = FakeInference("Healthy", 2800.0)
     detector.objects = objects
     pipeline = _pipeline(tmp_path, detector)
-    assert asyncio.run(pipeline._stable_and_in_frame(None, (100.0, 100.0, 300.0, 250.0))) is False
+    assert asyncio.run(pipeline._ready_to_capture(_placed(), (101.0, 101.0, 301.0, 251.0), 0.91, "presence")) is False
     assert pipeline._overlay.label == label
     assert pipeline._ignored_label == ignored
 
@@ -561,7 +630,7 @@ def test_an_ignored_object_is_not_rechecked_until_the_table_changes(tmp_path, mo
     assert detector.runs == 2 and pipeline._ignored_label is None
 
 
-def test_a_moving_hand_is_labelled_at_first_sight_and_never_captured(tmp_path, monkeypatch) -> None:
+def test_a_hand_in_view_is_labelled_and_never_captured(tmp_path, monkeypatch) -> None:
     detector = CountingDetector()
     detector.objects = ObjectCheck(0.62, None)  # the trigger boxes a hand opening and closing
     pipeline = _pipeline(tmp_path, detector)
@@ -581,12 +650,76 @@ def test_a_moving_hand_is_labelled_at_first_sight_and_never_captured(tmp_path, m
         detector.bunch = ((150.0, 60.0, 450.0, 300.0), 0.93, "presence") if frame is hand else None
         return frame
 
-    async def no_window(frame, box):
-        raise AssertionError("a hand must not reach the stability check")
+    async def no_scan():
+        raise AssertionError("a hand must not be captured")
 
     monkeypatch.setattr(pipeline, "_capture_lores", capture)
-    monkeypatch.setattr(pipeline, "_stable_and_in_frame", no_window)
+    monkeypatch.setattr(pipeline, "_process_scan", no_scan)
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(pipeline._run())
     assert pipeline._overlay.label == "Hand in view (0.62) · let go to scan"
-    assert pipeline.state is PipelineState.IDLE
+
+
+def _run_on(camera, tmp_path, confidence=0.99):
+    storage = Storage(tmp_path / "p.db")
+    storage.initialize()
+    inference = FakeInference("Healthy", 2800.0, confidence=confidence)
+    pipeline = PresencePipeline(storage, inference, LedController(outputs=None))
+    pipeline._camera = camera
+    pipeline._capture_box = (20.0, 10.0, 400.0, 125.0)
+    asyncio.run(pipeline._process_scan())
+    return storage.get_scan(pipeline.last_scan_id), pipeline
+
+
+def test_the_held_result_keeps_the_box_it_was_measured_on(tmp_path, monkeypatch) -> None:
+    scan, pipeline = _run_on(FakeCamera(), tmp_path)
+    measured = tuple(value * 640 / 4608 for value in (100.0, 50.0, 2900.0, 900.0))  # Stage 2's box on the preview
+    assert pipeline._held_box == pytest.approx(measured)
+    pipeline._hold = True
+    pipeline.presence_interval_s = 0
+    jittered = [(measured[0] + 6, measured[1] - 4, measured[2] - 9, measured[3] + 5), (300.0, 200.0, 600.0, 350.0)]
+    frames = [_placed(1), _placed(2)]
+
+    async def capture():
+        if not frames:
+            raise asyncio.CancelledError
+        return frames.pop(0)
+
+    shown = []
+
+    async def presence(frame):
+        if shown or pipeline._overlay is not None:
+            shown.append(pipeline._overlay.box)
+        return (jittered.pop(0), 0.97, "presence")
+
+    monkeypatch.setattr(pipeline, "_capture_lores", capture)
+    monkeypatch.setattr(pipeline, "_presence_check", presence)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(pipeline._run())
+    assert shown[0] == pytest.approx(measured)  # a wobbling box on the same bunch: the measured box stays
+    assert pipeline._overlay.box == (300.0, 200.0, 600.0, 350.0)  # moved for real: the live box
+
+
+def test_a_weak_trigger_box_is_shown_but_never_captured(tmp_path, monkeypatch) -> None:
+    # Both hands scanned as Rejected scored 0.83-0.84 on the trigger; every dataset bunch scored 0.93 or more.
+    detector = CountingDetector()
+    pipeline = _pipeline(tmp_path, detector)
+    pipeline.presence_interval_s = 0
+    pipeline.release_s = 0
+    frames = [_velvet(2)] * 2 + [_placed(1)] * 4
+
+    async def capture():
+        if not frames:
+            raise asyncio.CancelledError
+        frame = frames.pop(0)
+        detector.bunch = ((160.0, 90.0, 480.0, 270.0), 0.84, "presence") if frame.max() > 100 else None
+        return frame
+
+    async def no_scan():
+        raise AssertionError("a weak box must not be captured")
+
+    monkeypatch.setattr(pipeline, "_process_scan", no_scan)
+    monkeypatch.setattr(pipeline, "_capture_lores", capture)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(pipeline._run())
+    assert pipeline._overlay.label == "Unsure it is a bunch (0.84, needs 0.90)"

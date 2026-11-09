@@ -4,9 +4,29 @@ import { apiBase, request } from '../../composables/useApi.js'
 
 const props = defineProps({ pipeline: { type: Object, default: null } })
 const camera = computed(() => props.pipeline?.camera || {})
+// The image asks for one preview frame at a time and for the next only once it has loaded, so a slow link (a phone
+// hotspot) lowers the frame rate instead of queueing frames: the pushed MJPEG stream fell seconds behind the camera.
 const streamError = ref(false)
 const streamKey = ref(0)
-const streamSrc = computed(() => `${apiBase}/api/camera/preview.mjpg?k=${streamKey.value}`)
+const frameCount = ref(0)
+const streamSrc = computed(() => `${apiBase}/api/camera/preview.jpg?n=${streamKey.value}-${frameCount.value}`)
+let frameFailures = 0
+let waitingForTab = false
+let retryTimer = null
+function nextFrame() {
+  frameFailures = 0
+  if (document.hidden) { waitingForTab = true; return } // no frames for a background tab
+  frameCount.value += 1
+}
+function frameFailed() {
+  frameFailures += 1
+  if (frameFailures >= 5) { streamError.value = true; return }
+  window.clearTimeout(retryTimer)
+  retryTimer = window.setTimeout(() => { frameCount.value += 1 }, 1000)
+}
+function onVisibility() {
+  if (!document.hidden && waitingForTab) { waitingForTab = false; frameCount.value += 1 }
+}
 const snapshotBusy = ref(false)
 const snapshotError = ref('')
 async function openSnapshot() {
@@ -112,10 +132,19 @@ async function toggleExpanded() {
 }
 function onFullscreenChange() { if (!document.fullscreenElement && expanded.value) expanded.value = false }
 function onKey(event) { if (event.key === 'Escape' && expanded.value && !document.fullscreenElement) expanded.value = false }
-onMounted(() => { document.addEventListener('fullscreenchange', onFullscreenChange); document.addEventListener('keydown', onKey) })
-onBeforeUnmount(() => { document.removeEventListener('fullscreenchange', onFullscreenChange); document.removeEventListener('keydown', onKey) })
+onMounted(() => {
+  document.addEventListener('fullscreenchange', onFullscreenChange)
+  document.addEventListener('keydown', onKey)
+  document.addEventListener('visibilitychange', onVisibility)
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('fullscreenchange', onFullscreenChange)
+  document.removeEventListener('keydown', onKey)
+  document.removeEventListener('visibilitychange', onVisibility)
+  window.clearTimeout(retryTimer)
+})
 
-watch(() => camera.value.available, available => { if (available) { streamError.value = false; streamKey.value += 1 } })
+watch(() => camera.value.available, available => { if (available) { streamError.value = false; frameFailures = 0; streamKey.value += 1 } })
 
 const illumination = computed(() => {
   const value = camera.value.illumination
@@ -141,7 +170,7 @@ const focus = computed(() => {
     </div>
     <div ref="previewEl" :class="['camera-preview', { expanded }]">
       <div v-if="camera.available && !streamError" class="camera-frame">
-        <img :src="streamSrc" alt="Live top-down camera preview of the inspection zone" @error="streamError = true">
+        <img :src="streamSrc" alt="Live top-down camera preview of the inspection zone" @load="nextFrame" @error="frameFailed">
         <svg v-if="showGuide || alignment" class="placement-guide" :viewBox="`0 0 ${GUIDE.width} ${GUIDE.height}`" preserveAspectRatio="none" aria-hidden="true">
           <g v-if="showGuide">
             <path class="guide-edge" :d="`M0 0H${GUIDE.side}V${GUIDE.height}H0Z M${GUIDE.width - GUIDE.side} 0H${GUIDE.width}V${GUIDE.height}H${GUIDE.width - GUIDE.side}Z`" />

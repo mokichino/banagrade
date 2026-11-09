@@ -24,6 +24,7 @@ from .clock import MIN_JUMP_S, WATCH_S, ClockWatch, set_clock, time_synchronized
 from .drift import drift_report
 from .leds import GRADE_TO_LED, LedState
 from .model_inference import UltralyticsInference
+from .photos import preview_jpeg
 from .pipeline import PipelineState, PresencePipeline
 from .telemetry import read_telemetry, sample_temperature_forever
 from .storage import SHIFT_FROM_SCAN, ShiftClosed, Storage, disputes_zip, now_iso, scans_csv
@@ -282,15 +283,26 @@ async def camera_preview() -> StreamingResponse:
 
     async def frames():
         boundary = b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"
-        last = None
+        seq = -1
         while pipeline.camera_available:
-            frame = pipeline.latest_jpeg()
-            if frame is not None and frame is not last:
-                last = frame
+            seq, frame = await pipeline.next_jpeg(seq)
+            if frame is not None:
                 yield boundary + frame + b"\r\n"
-            await asyncio.sleep(0.2)
 
     return StreamingResponse(frames(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+
+@app.get("/api/camera/preview.jpg")
+async def camera_preview_frame(after: int | None = None) -> Response:
+    """The next preview frame: newer than frame number ``after``, or by default than the newest one when the request
+    arrived (waits up to 1 s). The dashboard's image asks for the next frame only once this one has loaded, so the
+    picture never falls behind the camera on a slow link; a weak link only lowers the frame rate."""
+    if not pipeline.camera_available:
+        raise HTTPException(status_code=503, detail="Camera unavailable")
+    seq, frame = await pipeline.next_jpeg(pipeline.preview_seq if after is None else after)
+    if frame is None:
+        raise HTTPException(status_code=503, detail="No preview frame yet")
+    return Response(frame, media_type="image/jpeg", headers={"Cache-Control": "no-store", "X-Frame-Seq": str(seq)})
 
 
 @app.get("/api/camera/snapshot.jpg")
@@ -409,6 +421,28 @@ async def unvoid_scans(payload: UnvoidRequest) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Scan not found")
     await events.publish("scans_unvoided", {"scan_ids": restored})
     return {"restored": len(restored), "skipped": len(set(payload.scan_ids)) - len(restored)}
+
+
+@app.get("/api/inspection/scans/{scan_id}/photo")
+async def scan_photo(scan_id: str, size: str = Query("preview", pattern="^(preview|full)$")) -> Response:
+    """The photo a scan was graded from: a quarter-size preview, or the full frame for a closer look.
+
+    404 once the frame archive has pruned it (unless a dispute kept a copy), or if none was saved. The frame is written
+    just after the result is shown, so a 404 in the first second may only mean "not yet"; the dashboard retries."""
+    paths = storage.scan_photo_paths(scan_id)
+    if paths is None:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    photo = next((path for path in paths if path.is_file()), None)
+    if photo is None:
+        raise HTTPException(status_code=404, detail="No photo kept for this scan")
+    headers = {"Cache-Control": "private, max-age=86400"}  # a scan's photo never changes
+    if size == "full":
+        return FileResponse(photo, media_type="image/jpeg", headers=headers)
+    try:
+        jpeg = await asyncio.to_thread(preview_jpeg, photo)
+    except FileNotFoundError as error:  # pruned between the check and the read, or unreadable
+        raise HTTPException(status_code=404, detail="No photo kept for this scan") from error
+    return Response(jpeg, media_type="image/jpeg", headers=headers)
 
 
 @app.get("/api/inspection/scans/{scan_id}/disputes")

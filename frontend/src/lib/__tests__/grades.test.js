@@ -88,7 +88,7 @@ describe('failure reasons', async () => {
     expect(failureReason({ final_grade: null, rejection_reason: 'DETECTION_FAILED', stage2_confidence: 0.874, error_details: 'Stage 2 confidence 0.87 is below 0.90' }))
       .toBe('Not measured: outline 87% (needs 90%) · check by hand')
     expect(failureReason({ final_grade: null, rejection_reason: 'DETECTION_FAILED', stage2_confidence: null })).toBe('Not measured: no outline found · check by hand')
-    expect(failureReason({ final_grade: null, rejection_reason: 'NOT_A_BUNCH' })).toBe('Not a bunch: no banana colour')
+    expect(failureReason({ final_grade: null, rejection_reason: 'NOT_A_BUNCH' })).toBe('Not a bunch: unlike the bunches the models were trained on')
     expect(failureReason({ final_grade: 'Rejected', rejection_reason: 'SURFACE_UNHEALTHY' })).toBe('Unhealthy at Stage 1')
     expect(failureReason({ final_grade: 'Class A' })).toBe('')
   })

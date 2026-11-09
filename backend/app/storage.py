@@ -330,6 +330,25 @@ class Storage:
                 done.append(scan_id)
         return done
 
+    def scan_photo_paths(self, scan_id: str) -> list[Path] | None:
+        """Where a scan's photo may be: the frame the scanner saved, then any copy a dispute archived for retraining
+        (the frame archive keeps only the newest frames, but a disputed one survives there). None for an unknown scan."""
+        with self.connect() as connection:
+            scan = connection.execute("SELECT image_refs FROM scans WHERE scan_id = ?", (scan_id,)).fetchone()
+            if scan is None:
+                return None
+            archived = connection.execute(
+                "SELECT archived_frames FROM scan_disputes WHERE scan_id = ? ORDER BY created_at DESC, rowid DESC",
+                (scan_id,),
+            ).fetchall()
+        refs: list[str] = []
+        for text in [scan["image_refs"], *(row["archived_frames"] for row in archived)]:
+            if not text:
+                continue
+            value = json.loads(text) if text.startswith("[") else text
+            refs.extend(value if isinstance(value, list) else [value])
+        return [Path(ref) for ref in dict.fromkeys(refs)]
+
     def scan_disputes(self, scan_id: str) -> list[dict[str, Any]]:
         with self.connect() as connection:
             rows = connection.execute(

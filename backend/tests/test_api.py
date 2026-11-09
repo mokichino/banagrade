@@ -37,6 +37,7 @@ def test_status_reports_disabled_pipeline_without_fabrication(client) -> None:
     assert body["pipeline"]["preprocessing"].startswith("Raw RGB")  # Stage 1 mask is off by default
     assert [m["label"] for m in body["models"]["models"]] == ["stage1_best.pt", "stage2_best.pt", "best.pt", "yolo11n.pt"]
     assert test_client.get("/api/camera/preview.mjpg").status_code == 503
+    assert test_client.get("/api/camera/preview.jpg").status_code == 503
     assert test_client.post("/api/camera/alignment").status_code == 503
 
 

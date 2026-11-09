@@ -49,7 +49,7 @@ export function failureReason(scan) {
     case 'DETECTION_FAILED':
       return scan.stage2_confidence != null ? `Not measured: outline ${percent(scan.stage2_confidence)}${needs} · check by hand` : 'Not measured: no outline found · check by hand'
     case 'NOT_A_BUNCH':
-      return 'Not a bunch: no banana colour'
+      return 'Not a bunch: unlike the bunches the models were trained on'
     case 'PIPELINE_ERROR':
       return `Scan error: ${scan.error_details || 'see System Status'}`
     default:

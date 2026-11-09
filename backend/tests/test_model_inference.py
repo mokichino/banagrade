@@ -182,3 +182,13 @@ def test_trained_presence_model_below_the_trigger_gate_does_not_fire() -> None:
     inference._stage2 = StubDetector([((10, 20, 300, 200), 0.95)])
     inference._load_presence(lambda path: StubDetector([((12, 22, 298, 205), 0.74)], names={0: "banana_bunch"}))
     assert inference.detect_presence(None, 0.80) is None  # Stage 2 is not consulted in trained mode
+
+
+def test_bunch_distance_is_zero_for_a_training_bunch_and_grows_for_something_else() -> None:
+    np = pytest.importorskip("numpy")
+    from app.model_inference import bunch_distance
+
+    reference = np.eye(8, dtype=np.float32)[:6]  # six "training bunches"
+    assert bunch_distance(np.array([0, 0, 0, 0, 0, 0, 1.0, 0]), reference, k=1) == pytest.approx(1.0)  # unlike all of them
+    assert bunch_distance(np.array([3.0, 0, 0, 0, 0, 0, 0, 0]), reference, k=1) == pytest.approx(0.0)  # scale does not matter
+    assert bunch_distance(np.array([1.0, 1.0, 0, 0, 0, 0, 0, 0]), reference, k=2) == pytest.approx(1 - 2 ** -0.5)

@@ -21,3 +21,10 @@ models/dataset/
 training/**/*.pt
 training/**/*.npz
 training/**/train_batch*.jpg
+training/
+docs/RELEASE_NOTES.md
+docs/ON_SITE_TESTS.md
+docs/PRESENCE_MODEL.md
+docs/QUALITY_CHECKLIST.md
+docs/THINGS_TO_FIX.md
+docs/WORK_SUMMARY_FOR_PAPER.md

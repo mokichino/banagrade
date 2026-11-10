@@ -39,10 +39,11 @@ describe('ScanTable', () => {
     expect(wrapper.find('td.empty').text()).toBe('No scan records match.')
   })
 
-  it('labels a failed scan as a technical failure, never as Rejected', () => {
+  it('labels a failed scan as Not graded (thesis 3.6.5), never as Rejected', () => {
     const scan = { scan_id: 'f1', captured_at: '2026-10-25T08:00:00Z', stage1_status: 'Unhealthy', stage1_confidence: 0.62, final_grade: null, processing_status: 'failed' }
     const text = mount(ScanTable, { props: { scans: [scan] } }).text()
-    expect(text).toContain('Technical failure')
+    expect(text).toContain('Not graded')
+    expect(text).not.toContain('Technical failure')
     expect(text).not.toContain('Rejected')
   })
 
@@ -110,12 +111,13 @@ describe('DisputeModal', () => {
     expect(save().attributes('disabled')).toBeUndefined()
   })
 
-  it('treats a missing grade as a recorded technical failure', async () => {
+  it('treats a missing grade as recorded Not graded', async () => {
     mockFetch({ '/api/inspection/scans/s3/disputes': { items: [] } })
     const wrapper = mount(DisputeModal, { props: { scan: null } })
     await wrapper.setProps({ scan: { scan_id: 's3', final_grade: null } })
     await wrapper.find('select').setValue('Technical Failure')
-    expect(wrapper.find('.form-error').text()).toContain('already recorded as Technical failure')
+    expect(wrapper.find('.form-error').text()).toContain('already recorded as Not graded')
+    expect(wrapper.find('option[value="Technical Failure"]').text()).toBe('Not graded')  // the API value stays
   })
 })
 
@@ -386,6 +388,7 @@ describe('views', () => {
     const wrapper = mount(DashboardView)
     await flushPromises()
     expect(wrapper.text()).toContain('No accepted bunches in this shift yet.')
+    expect(wrapper.text()).toContain('No graded scans yet')  // a share of nothing is not 0%
     expect(wrapper.text()).toContain('No graded scans in this shift yet.')
     expect(wrapper.emitted('error')).toBeUndefined()
   })
@@ -417,6 +420,7 @@ describe('views', () => {
     const wrapper = mount(DashboardView, { attachTo: document.body })
     await flushPromises()
     expect(wrapper.findAll('.kpi-card strong').map(number => number.text())).toEqual(['24', '45', '24'])
+    expect(wrapper.findAll('.kpi-share').map(share => share.text())).toEqual(['25.8% of graded', '48.4% of graded', '25.8% of graded'])
     expect(wrapper.find('.yield-legend').text()).toContain('34.8%')
     // The breakdown is a dropdown: closed at first, opened by its button, closed again by a click elsewhere.
     const toggle = wrapper.find('.volume-toggle')

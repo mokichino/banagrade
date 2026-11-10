@@ -10,8 +10,8 @@ describe('grade presentation', () => {
   it('formats short scan IDs', () => {
     expect(scanLabel(healthyA.scan_id)).toBe('#SCN-ABCDEF')
   })
-  it('never shows a technical failure as Rejected', () => {
-    expect(finalGradeLabel(failure)).toBe('Technical failure')
+  it('never shows a Not graded scan as Rejected', () => {
+    expect(finalGradeLabel(failure)).toBe('Not graded')
     expect(finalGradeKey(failure)).toBe('t')
     expect(finalGradeKey(rejected)).toBe('r')
   })
@@ -35,8 +35,8 @@ describe('grade presentation', () => {
     expect(matchesGrade(healthyA, 'Class A')).toBe(true)
     expect(matchesGrade(failure, 'Rejected')).toBe(false)
     expect(matchesGrade(failure, 'All')).toBe(true)
-    expect(matchesGrade(failure, 'Technical failure')).toBe(true)
-    expect(matchesGrade(rejected, 'Technical failure')).toBe(false)
+    expect(matchesGrade(failure, 'Not graded')).toBe(true)
+    expect(matchesGrade(rejected, 'Not graded')).toBe(false)
     expect(matchesGrade({ ...healthyA, disputed: 1 }, 'Disputed')).toBe(true)
     expect(matchesGrade(healthyA, 'Disputed')).toBe(false)
     const voided = { ...healthyA, voided_at: '2026-10-27T06:40:00Z', void_reason: 'Test run' }
@@ -46,7 +46,7 @@ describe('grade presentation', () => {
   it('summarises a dispute for the table badge', () => {
     expect(disputeSummary(healthyA)).toBe('')
     expect(disputeSummary({ ...healthyA, disputed: 1, model_grade: 'Class B', dispute_reason: 'Middle finger 12.0 cm' })).toBe('Model graded Class B · Middle finger 12.0 cm')
-    expect(disputeSummary({ ...rejected, disputed: 1, model_grade: 'Technical Failure', dispute_reason: null })).toBe('Model graded Technical failure')
+    expect(disputeSummary({ ...rejected, disputed: 1, model_grade: 'Technical Failure', dispute_reason: null })).toBe('Model held it as Not graded')
     expect(matchesSearch(healthyA, '#scn-abc')).toBe(true)
     expect(matchesSearch(healthyA, '2026-10-13')).toBe(true)
     expect(matchesSearch(rejected, 'abcdef')).toBe(false)

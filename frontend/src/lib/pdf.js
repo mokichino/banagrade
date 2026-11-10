@@ -17,7 +17,7 @@ const TONES = {
   'Class A': { soft: [255, 248, 225], line: [217, 163, 0], ink: [138, 90, 0] },
   'Class B': { soft: [239, 246, 255], line: [37, 99, 235], ink: [29, 78, 216] },
   Rejected: { soft: [254, 242, 242], line: [220, 38, 38], ink: [185, 28, 28] },
-  'Technical failure': { soft: [243, 244, 246], line: [156, 163, 175], ink: SECONDARY }
+  'Not graded': { soft: [243, 244, 246], line: [156, 163, 175], ink: SECONDARY }
 }
 const VOIDED_TONE = { soft: [243, 244, 246], line: BORDER, ink: MUTED }
 
@@ -177,7 +177,7 @@ export function buildScansPdf(scans, { filter = 'All', search = '', shift = 'All
     didDrawCell: data => {
       if (data.section !== 'body' || data.column.index !== 6) return
       const label = data.cell.raw
-      const tone = isVoided(scans[data.row.index]) ? VOIDED_TONE : TONES[label] || TONES['Technical failure']
+      const tone = isVoided(scans[data.row.index]) ? VOIDED_TONE : TONES[label] || TONES['Not graded']
       doc.setFont('helvetica', 'bold')
       doc.setFontSize(7.5)
       const width = doc.getTextWidth(label) + 12

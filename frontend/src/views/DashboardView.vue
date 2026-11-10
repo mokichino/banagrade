@@ -54,11 +54,13 @@ const graded = computed(() => count('total_completed_scans'))
 const accepted = computed(() => count('class_a_count') + count('class_b_count'))
 const rejectionRate = computed(() => (graded.value ? (count('rejected_count') / graded.value) * 100 : null))
 const shareOfAccepted = n => (accepted.value ? formatPercent((n / accepted.value) * 100) : '')
+// The three grade cards share one denominator, so their percentages add up to 100.
+const ofGraded = n => (graded.value ? `${formatPercent((n / graded.value) * 100)} of graded` : 'No graded scans yet')
 const threshold = `${WIDTH_THRESHOLD_PX.toLocaleString()} px`
-// Total scans = graded + technical failures; voided scans sit outside the total.
+// Total scans = graded + not graded (held for a hand check); voided scans sit outside the total.
 const volumeRows = computed(() => [
   { label: 'Graded', value: graded.value, tone: 'graded' },
-  { label: 'Technical failures', value: count('technical_failure_count'), tone: 'failed', note: 'Left out of rates' },
+  { label: 'Not graded', value: count('technical_failure_count'), tone: 'failed', note: 'Left out of rates' },
   { label: 'Voided', value: count('voided_count'), tone: 'voided', note: 'Not in the total' }
 ])
 // The breakdown drops down over the page, so opening it never resizes the card row; a click elsewhere or Escape closes it.
@@ -229,9 +231,9 @@ defineExpose({ load })
         </div>
       </article>
       <div class="kpi-grid three">
-        <article class="kpi-card grade-a"><span>Class A</span><strong>{{ count('class_a_count') }}</strong><small>Large hand, width ≥ {{ threshold }}</small></article>
-        <article class="kpi-card grade-b"><span>Class B</span><strong>{{ count('class_b_count') }}</strong><small>Small hand, width &lt; {{ threshold }}</small></article>
-        <article class="kpi-card reject"><span>Rejected</span><strong>{{ count('rejected_count') }}</strong><small>Unhealthy at Stage 1</small></article>
+        <article class="kpi-card grade-a"><span>Class A</span><strong>{{ count('class_a_count') }}</strong><small class="kpi-share">{{ ofGraded(count('class_a_count')) }}</small><small>Large hand, width ≥ {{ threshold }}</small></article>
+        <article class="kpi-card grade-b"><span>Class B</span><strong>{{ count('class_b_count') }}</strong><small class="kpi-share">{{ ofGraded(count('class_b_count')) }}</small><small>Small hand, width &lt; {{ threshold }}</small></article>
+        <article class="kpi-card reject"><span>Rejected</span><strong>{{ count('rejected_count') }}</strong><small class="kpi-share">{{ ofGraded(count('rejected_count')) }}</small><small>Unhealthy at Stage 1</small></article>
       </div>
     </div>
 

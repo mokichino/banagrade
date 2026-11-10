@@ -182,6 +182,7 @@ nav { display: grid; gap: 3px; }
 .kpi-card span { color: var(--text-secondary); font-size: 12px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; }
 .kpi-card strong { margin: auto 0 14px; padding-top: 14px; font-size: 40px; line-height: 1; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
 .kpi-card small { color: var(--text-muted); font-size: 12px; }
+.kpi-card small.kpi-share { margin: -6px 0 12px; color: var(--text-secondary); font-weight: 600; }
 /* The number sits midway and the caption at the foot of the card, however tall the row makes it. */
 .kpi-card small:last-child { margin-top: auto; border-top: 1px solid rgba(17, 24, 39, .06); padding-top: 12px; }
 .kpi-card.grade-a { border-top-color: var(--class-a); background: linear-gradient(var(--class-a-soft), var(--surface) 60%); }

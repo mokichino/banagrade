@@ -9,13 +9,13 @@ const emit = defineEmits(['close', 'saved', 'changed', 'error'])
 const correctedGrade = ref('')
 const reason = ref('')
 const saving = ref(false)
-// The recorded grade in the form's own terms: a null final_grade is 'Technical Failure'.
+// The recorded grade in the API's terms: a null final_grade is 'Technical Failure', shown as 'Not graded' (thesis 3.6.5).
 const recorded = ref(null)
 const disputes = ref([])
 const confirming = ref(false)
 const deleting = ref(false)
 
-const gradeName = grade => (grade === 'Technical Failure' || !grade ? 'Technical failure' : grade)
+const gradeName = grade => (grade === 'Technical Failure' || !grade ? 'Not graded' : grade)
 const unchanged = computed(() => correctedGrade.value === recorded.value)
 const sizeCorrection = computed(() => !unchanged.value && ['Class A', 'Class B'].includes(correctedGrade.value))
 // Disputes come newest first; the oldest one holds the grade the scanner gave.
@@ -71,7 +71,7 @@ async function deleteDisputes() {
       <h2 id="dispute-title">Dispute grade</h2>
       <p class="muted">{{ scanLabel(scan.scan_id) }} is recorded as <b>{{ gradeName(recorded) }}</b>.</p>
       <label>Correct grade
-        <select v-model="correctedGrade" required><option value="" disabled>Choose the correct grade</option><option>Class A</option><option>Class B</option><option>Rejected</option><option>Technical Failure</option></select>
+        <select v-model="correctedGrade" required><option value="" disabled>Choose the correct grade</option><option>Class A</option><option>Class B</option><option>Rejected</option><option value="Technical Failure">Not graded</option></select>
       </label>
       <p v-if="unchanged" class="form-error">This scan is already recorded as {{ gradeName(recorded) }}. Choose a different grade.</p>
       <p v-else-if="sizeCorrection" class="form-hint">Give the measured finger length: the middle finger of the outer row, along its outer curve, from the tip to where the stalk joins. Class A is 12 cm or more.</p>

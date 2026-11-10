@@ -32,7 +32,8 @@ const stages = computed(() => {
     },
     {
       name: 'Stage 2 grading',
-      value: stage2 === 'N/A' ? 'Not graded' : stage2,
+      // A Healthy bunch with no Stage 2 grade was held as Not graded; an Unhealthy one never reached Stage 2.
+      value: stage2 === 'N/A' ? (isHealthy(scan) ? 'Not graded' : 'Not run') : stage2,
       tone: stage2 === 'N/A' ? 'muted' : '',
       percent: confidencePercent(scan.stage2_confidence),
       confidence: formatConfidence(scan.stage2_confidence),

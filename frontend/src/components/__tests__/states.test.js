@@ -8,7 +8,6 @@ import VoidDialog from '../VoidDialog.vue'
 import ModelsCard from '../status/ModelsCard.vue'
 import OperationalSummaryCard from '../status/OperationalSummaryCard.vue'
 import HardwareStatusCard from '../status/HardwareStatusCard.vue'
-import DriftCard from '../status/DriftCard.vue'
 import CameraCard from '../status/CameraCard.vue'
 import PowerCard from '../status/PowerCard.vue'
 import PowerDialog from '../PowerDialog.vue'
@@ -33,8 +32,6 @@ function mockFetch(routes) {
 }
 
 afterEach(() => vi.unstubAllGlobals())
-
-const indicator = (key, status, extra = {}) => ({ key, label: key.replace(/_/g, ' '), unit: 'rate', value: null, baseline: 0, limit: 0.05, direction: 'above', samples: 0, status, ...extra })
 
 describe('ScanTable', () => {
   it('shows an empty row when no scans match', () => {
@@ -204,6 +201,7 @@ describe('status cards with no data', () => {
     expect(wrapper.text()).toContain('Stage 2 detector · 400 ms stability check')  // fallback when the API names no trigger
     const trained = mount(ModelsCard, { props: { models: { ...models, trigger: 'YOLO11n-presence detector' } } })
     expect(trained.text()).toContain('YOLO11n-presence detector · 400 ms stability check')
+    expect(wrapper.find('a').attributes('href')).toBe('/api/exports/disputes.zip')  // the export works even when the models failed to load
   })
 
   it('OperationalSummaryCard renders placeholders without telemetry', () => {
@@ -244,21 +242,6 @@ describe('status cards with no data', () => {
     expect(options.method).toBe('POST')
     expect(JSON.parse(options.body).now_ms).toBeGreaterThanOrEqual(before)
     wrapper.unmount()
-  })
-
-  it('DriftCard handles missing, insufficient and drifting reports', () => {
-    expect(mount(DriftCard, { props: { drift: null } }).text()).toContain('Drift indicators unavailable.')
-
-    const insufficient = { status: 'insufficient_data', min_samples: 30, scans_considered: 4, indicators: [indicator('low_confidence_rate', 'insufficient_data')] }
-    const quiet = mount(DriftCard, { props: { drift: insufficient } })
-    expect(quiet.text()).toContain('Needs at least 30 scans')
-    expect(quiet.find('.drift-grid strong').text()).toBe('—')
-
-    const drifting = { status: 'drift_suspected', min_samples: 30, scans_considered: 200, indicators: [indicator('low_confidence_rate', 'warn', { value: 0.125, samples: 200 })] }
-    const loud = mount(DriftCard, { props: { drift: drifting } })
-    expect(loud.find('.drift-summary').text()).toBe('Review disputed frames: low confidence rate.')
-    expect(loud.find('.drift-grid strong').text()).toBe('12.5%')
-    expect(loud.find('a').attributes('href')).toBe('/api/exports/disputes.zip')
   })
 })
 
@@ -642,11 +625,12 @@ describe('views', () => {
   })
 
   it('System Status reports a failed load and clears every card', async () => {
-    mockFetch({})
+    const fetch = mockFetch({})
     const wrapper = mount(SystemStatusView, { global: { stubs: { CameraCard: true } } })
     await flushPromises()
     expect(wrapper.emitted('error')[0][0]).toBe('System status unavailable: Service unavailable')
-    expect(wrapper.text()).toContain('Drift indicators unavailable.')
+    expect(wrapper.text()).toContain('No completed scans yet')
+    expect(fetch.mock.calls.map(([url]) => url)).not.toContain('/api/system/drift')
     wrapper.unmount()
   })
 })

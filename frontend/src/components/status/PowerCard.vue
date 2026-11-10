@@ -15,7 +15,7 @@ const unavailable = computed(() => {
   <div class="panel">
     <p class="eyebrow">Power</p>
     <h2>Reboot or shut down</h2>
-    <p class="muted small">Rebooting also re-runs autofocus, so the rig height reading is fresh.</p>
+    <p class="muted small">Rebooting restarts the camera, which can clear one that has stopped sending frames.</p>
     <div v-if="!pending" class="power-actions">
       <button v-for="(action, key) in ACTIONS" :key="key" class="secondary-button" :disabled="done || !power?.[key]?.allowed" @click="choose(key)">{{ action.label }}</button>
     </div>

@@ -1,5 +1,6 @@
 <script setup>
 import { computed } from 'vue'
+import { apiBase } from '../../composables/useApi.js'
 
 const props = defineProps({ models: { type: Object, default: null } })
 const STATE_LABEL = { loaded: 'Loaded', missing: 'Missing', error: 'Error' }
@@ -10,8 +11,14 @@ const INPUT = { stage1: 'Raw RGB, whole frame resized to 224 × 224', stage2: 'R
 
 <template>
   <div class="panel models-card">
-    <p class="eyebrow">AI models</p>
-    <h2>Inference stack</h2>
+    <div class="panel-heading">
+      <div>
+        <p class="eyebrow">AI models</p>
+        <h2>Inference stack</h2>
+      </div>
+      <!-- Photos of disputed scans, sorted by corrected grade with labels.csv, for review before any offline retraining. -->
+      <a class="secondary-button link-button" :href="`${apiBase}/api/exports/disputes.zip`" title="Photos of disputed scans, sorted by the corrected grade, with labels.csv">Export disputed frames</a>
+    </div>
     <p v-if="models?.error" class="alert compact">{{ models.error }}</p>
     <div class="model-list">
       <div v-for="model in entries" :key="model.key" class="model-item">

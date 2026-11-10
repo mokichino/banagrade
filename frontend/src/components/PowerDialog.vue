@@ -39,7 +39,7 @@ function close() {
       <button type="button" class="close-button" aria-label="Close" @click="close"><CloseIcon /></button>
       <h2 id="power-title">Reboot or shut down the Pi</h2>
       <template v-if="!pending">
-        <p class="muted">Rebooting also re-runs autofocus, so the rig height reading is fresh.</p>
+        <p class="muted">Rebooting restarts the camera, which can clear one that has stopped sending frames.</p>
         <div class="power-actions">
           <button v-for="(action, key) in ACTIONS" :key="key" class="secondary-button" :disabled="done || !power?.[key]?.allowed" @click="choose(key)">{{ action.label }}</button>
         </div>

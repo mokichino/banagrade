@@ -12,6 +12,7 @@ import DriftCard from '../status/DriftCard.vue'
 import CameraCard from '../status/CameraCard.vue'
 import PowerCard from '../status/PowerCard.vue'
 import PowerDialog from '../PowerDialog.vue'
+import AppHeader from '../layout/AppHeader.vue'
 import AppSidebar from '../layout/AppSidebar.vue'
 import App from '../../App.vue'
 import DashboardView from '../../views/DashboardView.vue'
@@ -88,7 +89,7 @@ describe('DisputeModal', () => {
 
     expect(fetch).toHaveBeenCalledWith('/api/inspection/scans/s1/disputes', expect.objectContaining({ method: 'DELETE' }))
     expect(wrapper.find('.dispute-history').exists()).toBe(false)
-    expect(wrapper.text()).toContain('Recorded: Class B')
+    expect(wrapper.text()).toContain('recorded as Class B')
     expect(wrapper.emitted('changed')).toHaveLength(1)
   })
 
@@ -353,6 +354,16 @@ describe('sidebar power shortcut', () => {
     expect(wrapper.find('button.power-shortcut svg').exists()).toBe(true)
   })
 
+  it('only the header LED shows the key of LED states; the sidebar copy is a plain readout', () => {
+    const sidebar = mount(AppSidebar, { props: { views: [], active: 'dashboard', led: 'ready' } })
+    expect(sidebar.find('.led-legend').exists()).toBe(false)
+    expect(sidebar.find('.led-indicator').attributes('tabindex')).toBeUndefined()
+    expect(sidebar.find('.led-indicator').text()).toContain('System ready')
+    const header = mount(AppHeader, { props: { title: 'Live Dashboard', led: 'ready' } })
+    expect(header.findAll('.led-legend-row')).toHaveLength(7)
+    expect(header.find('.led-indicator').attributes('tabindex')).toBe('0')
+  })
+
   it('PowerDialog loads the permission when opened and confirms before shutting down', async () => {
     const power = { reboot: { allowed: true, permission: 'yes' }, shutdown: { allowed: true, permission: 'yes' } }
     const fetch = mockFetch({ '/api/system/status': { power }, '/api/system/power': { action: 'shutdown', delay_s: 1.5 } })
@@ -393,7 +404,6 @@ describe('views', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('No accepted bunches in this shift yet.')
     expect(wrapper.text()).toContain('No graded scans in this shift yet.')
-    expect(wrapper.text()).toContain('No graded scans yet')  // a share of nothing is not 0%
     expect(wrapper.emitted('error')).toBeUndefined()
   })
 
@@ -421,11 +431,23 @@ describe('views', () => {
       '/api/sessions': { items: SHIFTS },
       '/api/inspection/scans': { items: [] }
     })
-    const wrapper = mount(DashboardView)
+    const wrapper = mount(DashboardView, { attachTo: document.body })
     await flushPromises()
-    expect(wrapper.findAll('.kpi-share').map(share => share.text())).toEqual(['25.8% of graded', '48.4% of graded', '25.8% of graded'])
+    expect(wrapper.findAll('.kpi-card strong').map(number => number.text())).toEqual(['24', '45', '24'])
     expect(wrapper.find('.yield-legend').text()).toContain('34.8%')
-    expect(wrapper.find('.volume-foot').text()).toContain('4 technical failures, not counted in the rates')
+    // The breakdown is a dropdown: closed at first, opened by its button, closed again by a click elsewhere.
+    const toggle = wrapper.find('.volume-toggle')
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+    expect(wrapper.find('.volume-stats').isVisible()).toBe(false)
+    await toggle.trigger('click')
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+    expect(wrapper.find('.volume-stats').isVisible()).toBe(true)
+    expect(wrapper.findAll('.volume-stats dd').map(dd => dd.text())).toEqual(['93', '4', '0'])
+    expect(wrapper.find('.volume-stats').text()).toContain('Left out of rates')
+    expect(wrapper.find('.volume-stats').text()).not.toContain('·')
+    document.body.click()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.volume-stats').isVisible()).toBe(false)
     expect(wrapper.find('.chart-keys').text()).toContain('Shift average 25.8%')
 
     const chart = wrapper.findComponent({ name: 'LineChart' })
@@ -433,6 +455,7 @@ describe('views', () => {
     expect(chart.props('options').scales.x.type).toBe('linear')
     expect(chart.props('options').plugins.tooltip.callbacks.title([{ raw: { x: Date.parse('2026-10-26T19:15:00Z') } }])).toBe('Oct 27, 03:15–03:30')
     expect(wrapper.findAll('.chart-table tbody tr')).toHaveLength(2)
+    wrapper.unmount()
   })
 
   it('Dashboard marks a past shift and names today\'s shift, but never starts or ends one', async () => {

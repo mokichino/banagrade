@@ -23,7 +23,7 @@ const time = computed(() => now.value.toLocaleTimeString(undefined, { hour: '2-d
     <div class="topbar-title"><h1>{{ title }}</h1><p class="page-subtitle">{{ subtitle }}</p></div>
     <div class="header-context">
       <span v-if="demo" class="demo-chip" title="This database contains mock scans generated for presentation. They are not real grading results.">Demo data</span>
-      <LedIndicator :state="led" compact />
+      <LedIndicator :state="led" compact legend />
       <div class="header-divider"></div>
       <div class="connection"><span :class="['status-dot', connection === 'Connected' ? 'online' : 'offline']"></span>{{ connection }}</div>
       <div class="header-divider"></div>

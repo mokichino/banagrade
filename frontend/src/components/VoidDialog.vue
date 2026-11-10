@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { request as api } from '../composables/useApi.js'
 import { finalGradeLabel, formatTimestamp, isReadOnly, isVoided, scanLabel } from '../lib/grades.js'
 import { plural } from '../lib/shifts.js'
+import CloseIcon from './CloseIcon.vue'
 
 // Voiding is how a scan is taken out of the numbers: it stays in the audit trail, marked, and can be counted again.
 // `request` is { scans, restore }: restore false voids the listed scans that count, true counts the voided ones again.
@@ -53,12 +54,11 @@ function close() {
 <template>
   <div v-if="request" class="modal-backdrop" @click.self="close" @keydown.esc="close">
     <form class="modal panel" role="dialog" aria-modal="true" aria-labelledby="void-title" @submit.prevent="ready && save()">
-      <button type="button" class="close-button" aria-label="Close" @click="close">×</button>
-      <p class="eyebrow">Audit trail</p>
+      <button type="button" class="close-button" aria-label="Close" @click="close"><CloseIcon /></button>
       <template v-if="!restoring">
         <h2 id="void-title">Void {{ what }}</h2>
         <p class="muted">{{ single ? 'It stays' : 'They stay' }} in Recent Scans, marked Voided, and {{ single ? 'stops' : 'stop' }} counting in totals, rates and charts. Nothing is deleted; you can count {{ single ? 'it' : 'them' }} again at any time.</p>
-        <p v-if="single" class="void-subject">{{ finalGradeLabel(single) }} · {{ formatTimestamp(single.captured_at) }}</p>
+        <p v-if="single" class="void-subject"><b>{{ finalGradeLabel(single) }}</b><span>{{ formatTimestamp(single.captured_at) }}</span></p>
         <label>Reason
           <textarea ref="first" v-model="reason" required maxlength="500" placeholder="Why should this not count?"></textarea>
         </label>
@@ -73,7 +73,7 @@ function close() {
       <template v-else>
         <h2 id="void-title">Count {{ what }} again</h2>
         <p class="muted">{{ single ? 'It goes' : 'They go' }} back into totals, rates and charts. The void stays in the system log.</p>
-        <p v-if="single" class="void-subject">Voided {{ formatTimestamp(single.voided_at) }}: {{ single.void_reason }}</p>
+        <p v-if="single" class="void-subject"><b>{{ single.void_reason }}</b><span>Voided {{ formatTimestamp(single.voided_at) }}</span></p>
         <div class="modal-actions">
           <button type="button" class="secondary-button" :disabled="busy" @click="close">Cancel</button>
           <button ref="first" class="primary-button" :disabled="busy || !ready">{{ busy ? 'Saving…' : 'Count again' }}</button>

@@ -135,13 +135,38 @@ describe('ScanDrawer full-screen viewer', () => {
   })
 })
 
+describe('ScanDrawer details', () => {
+  it('shows the grade, both stages and the width against the Class A minimum', () => {
+    mountDrawer({ scan: scan({ stage1_confidence: 0.981, stage2_confidence: 0.934, inference_time_ms: 812.4 }) })
+    expect(wrapper.get('.grade-summary').classes()).toContain('b')
+    expect(wrapper.get('.grade-summary strong').text()).toBe('Class B')
+    const stages = wrapper.findAll('.stage-card')
+    expect(stages.map(stage => stage.get('strong').text())).toEqual(['Healthy', 'Class B'])
+    expect(stages.map(stage => stage.get('small').text())).toEqual(['98.1% confidence', '93.4% confidence'])
+    const facts = wrapper.findAll('.fact-list dd').map(dd => dd.text())
+    expect(facts[0]).toContain('2,400.0 px')
+    expect(facts[0]).toContain('330.1 px under the Class A minimum')
+    expect(facts.slice(1)).toEqual(['2,730.07 px', '812 ms'])
+  })
+
+  it('explains a rejected, voided scan without a Stage 2 grade', () => {
+    mountDrawer({ scan: scan({ final_grade: 'Rejected', stage1_status: 'Unhealthy', rejection_reason: 'SURFACE_UNHEALTHY', pixel_length: null, bbox_coords: null, voided_at: '2026-11-09T06:00:00+00:00', void_reason: 'Test run', shift_closed: 1 }) })
+    expect(wrapper.get('.grade-summary').text()).toContain('Unhealthy at Stage 1')
+    expect(wrapper.findAll('.stage-card')[1].text()).toContain('Runs on healthy bunches only')
+    expect(wrapper.get('.scan-note').text()).toContain('Test run')
+    expect(wrapper.find('.voided-badge').exists()).toBe(true)
+    expect(wrapper.find('.read-only-badge').exists()).toBe(true)
+    expect(wrapper.findAll('.fact-list dd')[0].text()).toBe('Not measured')
+  })
+})
+
 describe('ScanDrawer keyboard', () => {
   it('moves focus to Close on open and closes on Escape', async () => {
     mountDrawer({ scan: null })
     await wrapper.setProps({ scan: scan() })
     await wrapper.vm.$nextTick()
     expect(document.activeElement?.getAttribute('aria-label')).toBe('Close scan detail')
-    await wrapper.get('.drawer').trigger('keydown', { key: 'Escape' })
+    await wrapper.get('.modal-backdrop').trigger('keydown', { key: 'Escape' })
     expect(wrapper.emitted('close')).toHaveLength(1)
   })
 })

@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { request } from '../composables/useApi.js'
 import { formatTimestamp, scanLabel } from '../lib/grades.js'
+import CloseIcon from './CloseIcon.vue'
 
 const props = defineProps({ scan: { type: Object, default: null } })
 const emit = defineEmits(['close', 'saved', 'changed', 'error'])
@@ -66,10 +67,9 @@ async function deleteDisputes() {
 <template>
   <div v-if="scan" class="modal-backdrop" @click.self="$emit('close')" @keydown.esc="$emit('close')">
     <form class="modal panel" role="dialog" aria-modal="true" aria-labelledby="dispute-title" @submit.prevent="submit">
-      <button type="button" class="close-button" aria-label="Close" @click="$emit('close')">×</button>
-      <p class="eyebrow">Operator correction</p>
+      <button type="button" class="close-button" aria-label="Close" @click="$emit('close')"><CloseIcon /></button>
       <h2 id="dispute-title">Dispute grade</h2>
-      <p class="muted">{{ scanLabel(scan.scan_id) }} · Recorded: {{ gradeName(recorded) }}</p>
+      <p class="muted">{{ scanLabel(scan.scan_id) }} is recorded as <b>{{ gradeName(recorded) }}</b>.</p>
       <label>Correct grade
         <select v-model="correctedGrade" required><option value="" disabled>Choose the correct grade</option><option>Class A</option><option>Class B</option><option>Rejected</option><option>Technical Failure</option></select>
       </label>

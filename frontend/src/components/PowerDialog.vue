@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { request } from '../composables/useApi.js'
 import { POWER_ACTIONS as ACTIONS, POWER_RULE_MISSING, usePowerAction } from '../composables/usePower.js'
+import CloseIcon from './CloseIcon.vue'
 
 const props = defineProps({ open: { type: Boolean, default: false } })
 const emit = defineEmits(['close'])
@@ -35,11 +36,10 @@ function close() {
 <template>
   <div v-if="open" class="modal-backdrop" @click.self="close" @keydown.esc="close">
     <div class="modal panel" role="dialog" aria-modal="true" aria-labelledby="power-title">
-      <button type="button" class="close-button" aria-label="Close" @click="close">×</button>
-      <p class="eyebrow">Power</p>
+      <button type="button" class="close-button" aria-label="Close" @click="close"><CloseIcon /></button>
       <h2 id="power-title">Reboot or shut down the Pi</h2>
       <template v-if="!pending">
-        <p class="muted small">Rebooting also re-runs autofocus, so the rig height reading is fresh.</p>
+        <p class="muted">Rebooting also re-runs autofocus, so the rig height reading is fresh.</p>
         <div class="power-actions">
           <button v-for="(action, key) in ACTIONS" :key="key" class="secondary-button" :disabled="done || !power?.[key]?.allowed" @click="choose(key)">{{ action.label }}</button>
         </div>

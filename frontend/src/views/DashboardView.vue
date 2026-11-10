@@ -1,10 +1,10 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ArcElement, Chart as ChartJS, DoughnutController, Filler, LineElement, LinearScale, PointElement, Tooltip } from 'chart.js'
 import { Doughnut, Line } from 'vue-chartjs'
 import { request } from '../composables/useApi.js'
-import { formatPercent } from '../lib/grades.js'
-import { currentShift, plural, scopeQuery, scopeShift, shiftDuration, shiftStart } from '../lib/shifts.js'
+import { WIDTH_THRESHOLD_PX, formatPercent } from '../lib/grades.js'
+import { currentShift, scopeQuery, scopeShift, shiftDuration, shiftStart } from '../lib/shifts.js'
 import { bucketLabel, intervalName, isIsolated, tickLabels, tickStep, timeTicks, trendBounds, trendPoints } from '../lib/trend.js'
 import ScanTable from '../components/ScanTable.vue'
 import RenameShiftDialog from '../components/RenameShiftDialog.vue'
@@ -53,9 +53,22 @@ const count = key => summary.value[key] ?? 0
 const graded = computed(() => count('total_completed_scans'))
 const accepted = computed(() => count('class_a_count') + count('class_b_count'))
 const rejectionRate = computed(() => (graded.value ? (count('rejected_count') / graded.value) * 100 : null))
-// The three grade cards share one denominator, so their percentages add up to 100.
-const ofGraded = n => (graded.value ? `${formatPercent((n / graded.value) * 100)} of graded` : 'No graded scans yet')
 const shareOfAccepted = n => (accepted.value ? formatPercent((n / accepted.value) * 100) : '')
+const threshold = `${WIDTH_THRESHOLD_PX.toLocaleString()} px`
+// Total scans = graded + technical failures; voided scans sit outside the total.
+const volumeRows = computed(() => [
+  { label: 'Graded', value: graded.value, tone: 'graded' },
+  { label: 'Technical failures', value: count('technical_failure_count'), tone: 'failed', note: 'Left out of rates' },
+  { label: 'Voided', value: count('voided_count'), tone: 'voided', note: 'Not in the total' }
+])
+// The breakdown drops down over the page, so opening it never resizes the card row; a click elsewhere or Escape closes it.
+const breakdownOpen = ref(false)
+const breakdown = ref(null)
+function closeBreakdown(event) {
+  if (event.type === 'keydown' ? event.key === 'Escape' : !breakdown.value?.contains(event.target)) breakdownOpen.value = false
+}
+onMounted(() => { document.addEventListener('click', closeBreakdown); document.addEventListener('keydown', closeBreakdown) })
+onBeforeUnmount(() => { document.removeEventListener('click', closeBreakdown); document.removeEventListener('keydown', closeBreakdown) })
 
 const yieldChart = computed(() => ({
   labels: ['Class A', 'Class B'],
@@ -202,16 +215,23 @@ defineExpose({ load })
         <p class="eyebrow">Processing volume</p>
         <strong class="hero-number">{{ loading ? '—' : count('total_scans').toLocaleString() }}</strong>
         <p class="muted">Cardava bunches scanned {{ scopePhrase }}</p>
-        <p class="volume-foot">
-          <span>{{ graded.toLocaleString() }} graded</span>
-          <span v-if="count('technical_failure_count')">· {{ plural(count('technical_failure_count'), 'technical failure') }}, not counted in the rates</span>
-          <span v-if="count('voided_count')">· {{ count('voided_count').toLocaleString() }} voided, not counted at all</span>
-        </p>
+        <div ref="breakdown" class="volume-breakdown">
+          <button type="button" class="volume-toggle" :aria-expanded="breakdownOpen" aria-controls="volume-breakdown" @click="breakdownOpen = !breakdownOpen">
+            Breakdown
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6" /></svg>
+          </button>
+          <dl v-show="breakdownOpen" id="volume-breakdown" class="volume-stats">
+            <div v-for="row in volumeRows" :key="row.label" :class="{ zero: !row.value }">
+              <dt><span :class="['volume-dot', row.tone]" aria-hidden="true"></span>{{ row.label }}<small v-if="row.note">{{ row.note }}</small></dt>
+              <dd class="tabular">{{ row.value.toLocaleString() }}</dd>
+            </div>
+          </dl>
+        </div>
       </article>
       <div class="kpi-grid three">
-        <article class="kpi-card grade-a"><span>Class A</span><strong>{{ count('class_a_count') }}</strong><small class="kpi-share">{{ ofGraded(count('class_a_count')) }}</small><small>Large hand · width ≥ 2730.07 px</small></article>
-        <article class="kpi-card grade-b"><span>Class B</span><strong>{{ count('class_b_count') }}</strong><small class="kpi-share">{{ ofGraded(count('class_b_count')) }}</small><small>Small hand · width &lt; 2730.07 px</small></article>
-        <article class="kpi-card reject"><span>Rejected</span><strong>{{ count('rejected_count') }}</strong><small class="kpi-share">{{ ofGraded(count('rejected_count')) }}</small><small>Unhealthy at Stage 1</small></article>
+        <article class="kpi-card grade-a"><span>Class A</span><strong>{{ count('class_a_count') }}</strong><small>Large hand, width ≥ {{ threshold }}</small></article>
+        <article class="kpi-card grade-b"><span>Class B</span><strong>{{ count('class_b_count') }}</strong><small>Small hand, width &lt; {{ threshold }}</small></article>
+        <article class="kpi-card reject"><span>Rejected</span><strong>{{ count('rejected_count') }}</strong><small>Unhealthy at Stage 1</small></article>
       </div>
     </div>
 
@@ -228,8 +248,8 @@ defineExpose({ load })
             <div class="doughnut-center"><strong>{{ accepted }}</strong><span>accepted</span></div>
           </div>
           <ul class="yield-legend">
-            <li><span class="swatch a"></span><div><b>Class A</b><small>Large hand · width ≥ 2730.07 px</small></div><strong>{{ count('class_a_count') }}<em>{{ shareOfAccepted(count('class_a_count')) }}</em></strong></li>
-            <li><span class="swatch b"></span><div><b>Class B</b><small>Small hand · width &lt; 2730.07 px</small></div><strong>{{ count('class_b_count') }}<em>{{ shareOfAccepted(count('class_b_count')) }}</em></strong></li>
+            <li><span class="swatch a"></span><b>Class A</b><strong>{{ count('class_a_count') }}<em>{{ shareOfAccepted(count('class_a_count')) }}</em></strong></li>
+            <li><span class="swatch b"></span><b>Class B</b><strong>{{ count('class_b_count') }}<em>{{ shareOfAccepted(count('class_b_count')) }}</em></strong></li>
           </ul>
         </div>
       </div>
